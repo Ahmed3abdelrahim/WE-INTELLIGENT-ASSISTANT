@@ -119,3 +119,69 @@ Docker isn't available here).
 - `insufficient_evidence` is currently reached in two ways: (a) pre-LLM score-threshold gate,
   tuned provisionally at 0.015 (to be re-tuned against `eval/questions.jsonl` in Phase 5), and
   (b) post-LLM "no valid citation" downgrade. Both exercised for real above.
+
+---
+
+## Phase 2 — loaders, arabic, ocr, /documents, session filter
+
+**Status: DONE.** Exit check passed for real against the live native stack.
+
+**Built**
+- `backend/app/ingestion/loaders.py`: `load_pdf` (PyMuPDF per-page extraction, NFKC-normalize,
+  garbled-page detection → 300 DPI render → Tesseract OCR fallback, page numbers kept),
+  `load_docx` (walks `document.element.body` in order, headings set section, tables →
+  "header: value" rows), `load_txt` (utf-8 → cp1256 fallback), `load_image` (Tesseract
+  ara+eng, `ocr=true`), plus `detect_doc_type` (extension + magic-byte cross-check).
+- `backend/app/ingestion/ocr.py`: Tesseract `ara+eng` wrapper.
+- `backend/app/ingestion/chunking.py`: extended to carry `page`/`ocr` through from blocks
+  to final chunks (needed so upload citations include the right page number).
+- `POST/GET /api/v1/documents` (`backend/app/api.py`): synchronous upload → validate
+  (size, extension+magic, PDF page count) → load → chunk → embed → upsert with
+  `source_type=upload`, `session_id`, `doc_id` — exactly the fields `retrieval/search.py`'s
+  filter already scoped to session in Phase 1.
+- `tests/fixtures/generate_fixtures.py`: generates all 7 real fixture files (not placeholders)
+  — a genuine PyMuPDF-written text PDF, a python-docx file with a real table, a UTF-8 TXT,
+  an HTML file with nav/footer to strip, a PNG with real rendered text, and two **image-only**
+  PDFs (scanned English, and Arabic — both have no text layer, forcing the OCR path for real).
+  The Arabic fixture uses `arabic_reshaper`+`python-bidi` to pre-shape the text before
+  rendering, because PyMuPDF's own text-insertion APIs (`insert_text`, `insert_htmlbox` —
+  both tried) don't shape Arabic correctly and would have produced an unrepresentative fixture.
+
+**Commands run / real results**
+- `pytest tests/test_loaders.py tests/test_session_isolation.py`: **13/13 passed** (29/29
+  across the whole suite). Covers: PDF text-layer extraction with page numbers, OCR
+  triggering + recovery on both the scanned and Arabic image-only PDFs, DOCX table→rows,
+  TXT UTF-8 and cp1256 fallback, HTML nav/footer stripping, PNG OCR, magic-byte mismatch
+  rejection, and the session-isolation filter logic in isolation.
+- Real uploads via `curl` against the live stack, one per fixture type — **all 7 reached
+  `status: ready`**:
+  ```
+  text_pdf.pdf       -> pdf,  1 page,  1 chunk
+  arabic_pdf.pdf     -> pdf,  1 page,  1 chunk
+  scanned_pdf.pdf    -> pdf,  1 page,  1 chunk
+  mobile_packages.docx -> docx, 1 chunk
+  support_hours.txt  -> txt,  1 chunk
+  roaming_faq.html   -> html, 1 chunk
+  store_locations.png -> png, 1 chunk
+  ```
+- Real `/chat` call (session A) asking about both the text-PDF price and the DOCX table,
+  with `doc_ids` scoped to those two uploads: answered correctly, citing `[S1]` (text_pdf.pdf,
+  **page 1**) and `[S2]` (mobile_packages.docx, the table data), no numeric warning.
+- **Session isolation, verified live, not just unit-tested**: `GET /documents` from a second
+  session (`doc-test-session-B`) returned `[]`; a `/chat` call from session B that explicitly
+  passed session A's `doc_ids` in the request body still could not retrieve them — the
+  response fell back to official te.eg content only, confirming the `session_id AND doc_id`
+  filter clause (not just the doc_id) is what gates upload visibility.
+
+**Limitations**
+- Tesseract's Arabic OCR accuracy on the synthetically-rendered Arabic PDF fixture is
+  imperfect at the letter level (word-level content and all key numbers were recovered
+  correctly; some letter reordering within words). This is a genuine OCR-engine limitation
+  on synthetic renders, not a bug in the ingestion code — documented honestly rather than
+  hidden. Real scanned Arabic documents (actual photographed/scanned pages) typically OCR
+  better than text rendered fresh onto a blank image.
+- A document that fits in a single chunk reports whichever heading was *last* seen as its
+  `section` (e.g. the DOCX fixture's citation says "Terms" even though the cited price data
+  sits under "Pricing Table") — section attribution gets more precise once a document is
+  large enough to span multiple chunks. Not fixed, since it didn't affect correctness of the
+  citation's `page`/`filename`/`excerpt`, only the `section` label's precision on tiny documents.

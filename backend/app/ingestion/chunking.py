@@ -32,6 +32,8 @@ def _group_atomic_units(blocks: list[dict]) -> list[dict]:
     current_section = None
     while i < len(blocks):
         b = blocks[i]
+        page = b.get("page")
+        ocr = b.get("ocr", False)
         if b["type"] == "heading":
             current_section = b["text"]
             # FAQ-style: a heading phrased as a question, immediately followed by one
@@ -42,10 +44,12 @@ def _group_atomic_units(blocks: list[dict]) -> list[dict]:
                 and blocks[i + 1]["type"] == "paragraph"
             ):
                 text = b["text"] + "\n" + blocks[i + 1]["text"]
-                units.append({"text": text, "section": current_section})
+                units.append({"text": text, "section": current_section, "page": page, "ocr": ocr})
                 i += 2
                 continue
-            units.append({"text": b["text"], "section": current_section, "is_heading": True})
+            units.append(
+                {"text": b["text"], "section": current_section, "is_heading": True, "page": page, "ocr": ocr}
+            )
             i += 1
             continue
         if b["type"] == "table_row":
@@ -54,10 +58,10 @@ def _group_atomic_units(blocks: list[dict]) -> list[dict]:
             while i < len(blocks) and blocks[i]["type"] == "table_row":
                 rows.append(blocks[i]["text"])
                 i += 1
-            units.append({"text": "\n".join(rows), "section": current_section})
+            units.append({"text": "\n".join(rows), "section": current_section, "page": page, "ocr": ocr})
             continue
         # paragraph
-        units.append({"text": b["text"], "section": current_section})
+        units.append({"text": b["text"], "section": current_section, "page": page, "ocr": ocr})
         i += 1
     return units
 
@@ -74,13 +78,24 @@ def chunk_blocks(blocks: list[dict], target_tokens: int | None = None, overlap_t
     current_texts: list[str] = []
     current_tokens = 0
     current_section = None
+    current_page = None
+    current_ocr = False
 
     def flush():
-        nonlocal current_texts, current_tokens, current_section
+        nonlocal current_texts, current_tokens, current_section, current_page, current_ocr
         if current_texts:
-            chunks.append({"text": "\n\n".join(current_texts), "section": current_section})
+            chunks.append(
+                {
+                    "text": "\n\n".join(current_texts),
+                    "section": current_section,
+                    "page": current_page,
+                    "ocr": current_ocr,
+                }
+            )
         current_texts = []
         current_tokens = 0
+        current_page = None
+        current_ocr = False
 
     for unit in units:
         unit_tokens = count_tokens(unit["text"])
@@ -101,6 +116,9 @@ def chunk_blocks(blocks: list[dict], target_tokens: int | None = None, overlap_t
                     current_texts = [" ".join(carried)]
                     current_tokens = carried_tokens
         current_section = unit.get("section") or current_section
+        if current_page is None:
+            current_page = unit.get("page")
+        current_ocr = current_ocr or unit.get("ocr", False)
         current_texts.append(unit["text"])
         current_tokens += unit_tokens
 

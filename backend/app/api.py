@@ -1,7 +1,7 @@
 import json
 import uuid
 
-from fastapi import APIRouter, Header, HTTPException
+from fastapi import APIRouter, File, Header, HTTPException, UploadFile
 from sse_starlette.sse import EventSourceResponse
 
 from .clients.asr import ASRClient
@@ -9,9 +9,22 @@ from .clients.llm import LLMClient
 from .clients.tts import TTSClient
 from .config import config
 from .generation.insights import compute_insights
+from .ingestion.chunking import chunk_blocks
+from .ingestion.loaders import detect_doc_type, load_document
 from .pipeline import answer as pipeline_answer
+from .retrieval.embed import encode
+from .retrieval.index import upsert_chunks
 from .schemas import ChatRequest, ConversationCreate, ConversationOut, HealthResponse
-from .store import create_conversation, get_conversation, get_messages, list_conversations, set_insights
+from .store import (
+    create_conversation,
+    create_document,
+    get_conversation,
+    get_messages,
+    list_conversations,
+    list_documents,
+    set_insights,
+    update_document,
+)
 
 router = APIRouter()
 
@@ -98,13 +111,77 @@ async def get_audio(audio_id: str):
 
 
 @router.post("/documents")
-async def post_documents():
-    raise HTTPException(status_code=501, detail="implemented in Phase 2")
+async def post_documents(
+    file: UploadFile = File(...), session_id: str = Header(default=None, alias="X-Session-Id")
+):
+    sid = session_id or str(uuid.uuid4())
+    data = await file.read()
+
+    if len(data) > config.MAX_FILE_MB * 1024 * 1024:
+        raise HTTPException(status_code=400, detail=f"file exceeds {config.MAX_FILE_MB} MB limit")
+
+    doc_type = detect_doc_type(file.filename or "upload", data)
+    if doc_type is None:
+        raise HTTPException(status_code=400, detail="unsupported or mismatched file type")
+
+    did = await create_document(sid, file.filename or "upload", doc_type)
+
+    try:
+        if doc_type == "pdf":
+            import pymupdf
+
+            page_count = len(pymupdf.open(stream=data, filetype="pdf"))
+            if page_count > config.MAX_PDF_PAGES:
+                await update_document(
+                    did, "error", pages=page_count, error=f"PDF exceeds {config.MAX_PDF_PAGES} page limit"
+                )
+                raise HTTPException(status_code=400, detail=f"PDF exceeds {config.MAX_PDF_PAGES} page limit")
+
+        title, blocks = load_document(doc_type, data)
+        title = title or file.filename or "upload"
+        chunks = chunk_blocks(blocks)
+
+        if not chunks:
+            await update_document(did, "error", error="no extractable text")
+            raise HTTPException(status_code=422, detail="no extractable text found in document")
+
+        texts = [c["text"] for c in chunks]
+        embeddings = encode(texts)
+
+        payloads = []
+        for i, c in enumerate(chunks):
+            payloads.append(
+                {
+                    "chunk_id": f"{did}_{i}",
+                    "source_type": "upload",
+                    "url": None,
+                    "title": title,
+                    "lang": "auto",
+                    "doc_id": did,
+                    "filename": file.filename,
+                    "page": c.get("page"),
+                    "section": c.get("section"),
+                    "session_id": sid,
+                    "ocr": c.get("ocr", False),
+                    "text": c["text"],
+                }
+            )
+        upsert_chunks(payloads, embeddings["dense"], embeddings["sparse"])
+
+        pages = max((c.get("page") or 0 for c in chunks), default=0) or None
+        await update_document(did, "ready", pages=pages, chunks=len(payloads))
+        return {"id": did, "filename": file.filename, "type": doc_type, "status": "ready", "pages": pages, "chunks": len(payloads)}
+    except HTTPException:
+        raise
+    except Exception as e:  # noqa: BLE001
+        await update_document(did, "error", error=str(e))
+        raise HTTPException(status_code=500, detail=f"ingestion failed: {e}") from e
 
 
 @router.get("/documents")
-async def get_documents():
-    raise HTTPException(status_code=501, detail="implemented in Phase 2")
+async def get_documents(session_id: str = Header(default=None, alias="X-Session-Id")):
+    sid = session_id or str(uuid.uuid4())
+    return await list_documents(sid)
 
 
 @router.post("/conversations/{conversation_id}/insights")

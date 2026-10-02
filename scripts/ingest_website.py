@@ -53,10 +53,10 @@ def main():
                     "lang": page["lang"],
                     "doc_id": page["sha256"],
                     "filename": None,
-                    "page": None,
+                    "page": c.get("page"),
                     "section": c.get("section"),
                     "session_id": None,
-                    "ocr": False,
+                    "ocr": c.get("ocr", False),
                     "text": c["text"],
                 }
             )

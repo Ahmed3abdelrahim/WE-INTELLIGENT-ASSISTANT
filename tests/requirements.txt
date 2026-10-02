@@ -1,0 +1,5 @@
+# Test-only dependencies (not needed by the running backend/service containers).
+pytest==9.1.1
+pytest-asyncio==1.4.0
+arabic_reshaper==3.0.1
+python-bidi==0.6.11
