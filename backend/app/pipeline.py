@@ -5,6 +5,7 @@ from .config import config
 from .generation.answer import rewrite_standalone_query, stream_answer
 from .generation.citations import validate as validate_citations
 from .ingestion.arabic import detect_lang
+from .ingestion.chunking import count_tokens
 from .retrieval.search import hybrid_search
 from .store import add_message, get_messages
 
@@ -34,6 +35,28 @@ def hits_to_sources(hits: list[dict]) -> list[dict]:
             }
         )
     return sources
+
+
+def _truncate_sources_to_budget(sources: list[dict], max_tokens: int) -> list[dict]:
+    """SPEC.md section 6 step 5: cap context at ~2k tokens. Found via eval (a 4-source
+    context hit 4308 tokens, exceeding the LLM's 4096 ctx-size, and the whole request was
+    rejected) that this was never actually enforced — only retrieval's final_top_k capped
+    source *count*, not combined *length*. Truncates each source's text proportionally so
+    all sources are kept (better for citation coverage than dropping whole sources)."""
+    total = sum(count_tokens(s["text"]) for s in sources)
+    if total <= max_tokens or not sources:
+        return sources
+    per_source_budget = max(50, max_tokens // len(sources))
+    truncated = []
+    for s in sources:
+        text = s["text"]
+        if count_tokens(text) > per_source_budget:
+            words = text.split()
+            while words and count_tokens(" ".join(words)) > per_source_budget:
+                words = words[: max(1, int(len(words) * 0.9))]
+            text = " ".join(words)
+        truncated.append({**s, "text": text})
+    return truncated
 
 
 async def answer(
@@ -97,7 +120,7 @@ async def answer(
         }
         return
 
-    sources = hits_to_sources(hits)
+    sources = _truncate_sources_to_budget(hits_to_sources(hits), config.MAX_CONTEXT_TOKENS)
 
     yield "stage", {"name": "generating"}
 
