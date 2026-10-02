@@ -185,3 +185,49 @@ Docker isn't available here).
   sits under "Pricing Table") — section attribution gets more precise once a document is
   large enough to span multiple chunks. Not fixed, since it didn't affect correctness of the
   citation's `page`/`filename`/`excerpt`, only the `section` label's precision on tiny documents.
+
+---
+
+## Phase 3 — asr + tts services, /transcribe, /messages/{id}/speech, speech_text
+
+**Status: DONE.** Exit check passed for real against the live native stack.
+
+**Built**
+- `backend/app/speech_text.py`: strips `[S#]` citation labels, URLs, and markdown
+  decorators; verbalizes numbers with `num2words` (en/ar); applies `config/tts_lexicon.yaml`
+  respellings for the Arabic voice only.
+- `POST /api/v1/transcribe`: calls the ASR service with hotwords loaded from
+  `config/asr_hotwords.txt`, then rejects (no LLM/pipeline involvement) when: no speech
+  detected, mean `no_speech_prob > 0.6`, or the transcript matches `config/asr_blocklist.txt`.
+- `POST /api/v1/messages/{id}/speech`: session-checked (via the message's conversation),
+  cleans the stored answer text, calls the TTS service, saves the WAV under `data/audio/`,
+  records `audio_path` on the message.
+- `GET /api/v1/audio/{id}`: session-checked the same way; serves the WAV or 403s.
+- `scripts/make_synthetic_clips.py`: generates **synthetic** (Piper-TTS-voiced, clearly
+  labeled) clips for ASR plumbing testing only — never a stand-in for the real recorded
+  clips `eval/audio_manifest.jsonl` expects from Ahmed (see `eval/RECORDING_CHECKLIST.md`).
+
+**Commands run / real results**
+- `pytest tests/test_speech_text.py`: **7/7 passed** (36/36 across the whole suite).
+- Real `/transcribe` calls against the live ASR service, one per required condition:
+  - **EN** (synthetic Piper clip, "What is the price of the home internet package?") →
+    transcribed **exactly** correctly, `rejected: false`.
+  - **Egyptian** (synthetic Arabic clip, "عايز أعرف سعر باقة الإنترنت المنزلي") →
+    transcribed **exactly** correctly, `rejected: false`.
+  - **Noisy** (same EN clip + injected white noise, ±1800 amplitude) → transcribed as
+    "What is the price of **a** home internet package?" (one article swapped, otherwise
+    correct) — real robustness under real injected noise, not simulated.
+  - **Silence** (2s of zero-amplitude PCM) → `rejected: true`, `reason: no_speech_detected`.
+- Real `/messages/{id}/speech` + `/audio/{id}` round trip on an actual stored Phase-1 answer:
+  produced a genuine playable WAV (`RIFF/WAVE, PCM 16-bit mono 22050Hz`, 1.2 MB).
+  Session isolation on the audio endpoint confirmed live: a different `X-Session-Id`
+  requesting the same audio id got **403**.
+
+**Limitations**
+- Synthetic clips are Piper-TTS voices, not human speech — real human-recorded clips
+  (Egyptian dialect, genuine background noise, code-switching) are still needed for the
+  Phase 5 WER/CER numbers; see `eval/RECORDING_CHECKLIST.md`. Nothing above substitutes for
+  that — it only proves the ASR/TTS/rejection plumbing itself works end-to-end.
+- The blocklist-hallucination rejection path (`asr_blocklist.txt`) was exercised by code
+  review and the no-speech path above, not by a live clip that actually triggers it —
+  reproducing a specific known Whisper hallucination on demand isn't practical to force.

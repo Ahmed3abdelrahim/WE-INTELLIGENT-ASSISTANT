@@ -1,13 +1,15 @@
 import json
 import uuid
+from pathlib import Path
 
-from fastapi import APIRouter, File, Header, HTTPException, UploadFile
+from fastapi import APIRouter, File, Form, Header, HTTPException, UploadFile
+from fastapi.responses import FileResponse
 from sse_starlette.sse import EventSourceResponse
 
 from .clients.asr import ASRClient
 from .clients.llm import LLMClient
 from .clients.tts import TTSClient
-from .config import config
+from .config import CONFIG_DIR, config
 from .generation.insights import compute_insights
 from .ingestion.chunking import chunk_blocks
 from .ingestion.loaders import detect_doc_type, load_document
@@ -15,15 +17,18 @@ from .pipeline import answer as pipeline_answer
 from .retrieval.embed import encode
 from .retrieval.index import upsert_chunks
 from .schemas import ChatRequest, ConversationCreate, ConversationOut, HealthResponse
+from .speech_text import clean_for_tts, voice_for_lang
 from .store import (
     create_conversation,
     create_document,
     get_conversation,
+    get_message,
     get_messages,
     list_conversations,
     list_documents,
     set_insights,
     update_document,
+    update_message_audio,
 )
 
 router = APIRouter()
@@ -95,19 +100,93 @@ async def post_chat(body: ChatRequest, session_id: str = Header(default=None, al
     return EventSourceResponse(event_stream())
 
 
+_blocklist_cache: list[str] | None = None
+_hotwords_cache: str | None = None
+
+
+def _load_blocklist() -> list[str]:
+    global _blocklist_cache
+    if _blocklist_cache is None:
+        path = CONFIG_DIR / "asr_blocklist.txt"
+        lines = path.read_text(encoding="utf-8").splitlines()
+        _blocklist_cache = [ln.strip() for ln in lines if ln.strip() and not ln.strip().startswith("#")]
+    return _blocklist_cache
+
+
+def _load_hotwords() -> str:
+    global _hotwords_cache
+    if _hotwords_cache is None:
+        path = CONFIG_DIR / "asr_hotwords.txt"
+        lines = path.read_text(encoding="utf-8").splitlines()
+        words = [ln.strip() for ln in lines if ln.strip() and not ln.strip().startswith("#")]
+        _hotwords_cache = ", ".join(words)
+    return _hotwords_cache
+
+
 @router.post("/transcribe")
-async def post_transcribe():
-    raise HTTPException(status_code=501, detail="implemented in Phase 3")
+async def post_transcribe(file: UploadFile = File(...), lang: str = Form(default=None)):
+    data = await file.read()
+    asr = ASRClient()
+    result = await asr.transcribe(
+        data, filename=file.filename or "audio.wav", language=lang, hotwords=_load_hotwords(), beam_size=1
+    )
+
+    text = result.get("text", "").strip()
+    no_speech_prob = result.get("no_speech_prob", 1.0)
+    rejected, reason = False, None
+
+    if not text or no_speech_prob > 0.6:
+        rejected, reason = True, "no_speech_detected"
+    else:
+        blocklist = _load_blocklist()
+        if any(phrase in text for phrase in blocklist):
+            rejected, reason = True, "hallucination_detected"
+
+    return {
+        "text": "" if rejected else text,
+        "lang": result.get("language"),
+        "duration_s": result.get("duration_s"),
+        "rejected": rejected,
+        "reason": reason,
+        "ms": result.get("ms"),
+    }
 
 
 @router.post("/messages/{message_id}/speech")
-async def post_message_speech(message_id: str):
-    raise HTTPException(status_code=501, detail="implemented in Phase 3")
+async def post_message_speech(message_id: str, session_id: str = Header(default=None, alias="X-Session-Id")):
+    sid = session_id or str(uuid.uuid4())
+    message = await get_message(message_id)
+    if not message:
+        raise HTTPException(status_code=404, detail="message not found")
+    conv = await get_conversation(message["conversation_id"], sid)
+    if not conv:
+        raise HTTPException(status_code=403, detail="not authorized for this message")
+
+    cleaned = clean_for_tts(message["text"], message["lang"])
+    tts = TTSClient()
+    wav_bytes = await tts.synthesize(cleaned, voice_for_lang(message["lang"]))
+
+    audio_path = config.AUDIO_DIR / f"{message_id}.wav"
+    audio_path.write_bytes(wav_bytes)
+    await update_message_audio(message_id, str(audio_path))
+
+    return {"audio_url": f"/api/v1/audio/{message_id}"}
 
 
 @router.get("/audio/{audio_id}")
-async def get_audio(audio_id: str):
-    raise HTTPException(status_code=501, detail="implemented in Phase 3")
+async def get_audio(audio_id: str, session_id: str = Header(default=None, alias="X-Session-Id")):
+    sid = session_id or str(uuid.uuid4())
+    message = await get_message(audio_id)
+    if not message or not message.get("audio_path"):
+        raise HTTPException(status_code=404, detail="audio not found")
+    conv = await get_conversation(message["conversation_id"], sid)
+    if not conv:
+        raise HTTPException(status_code=403, detail="not authorized for this audio")
+
+    path = Path(message["audio_path"])
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="audio file missing on disk")
+    return FileResponse(path, media_type="audio/wav")
 
 
 @router.post("/documents")
