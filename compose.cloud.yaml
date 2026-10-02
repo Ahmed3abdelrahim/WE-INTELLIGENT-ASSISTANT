@@ -1,0 +1,23 @@
+# Overlay: route the LLM through OpenRouter (comparison / opt-in only — see SPEC.md section 0).
+# Usage: docker compose -f compose.yaml -f compose.cloud.yaml up
+# Attaches backend to the default network for egress to openrouter.ai and sets LLM_PROVIDER=openrouter.
+# The local `llm` container stays up so local-vs-cloud comparisons can run side by side.
+
+services:
+  backend:
+    networks:
+      - internal
+      - default
+    environment:
+      - LLM_PROVIDER=openrouter
+      - LLM_LOCAL_URL=${LLM_LOCAL_URL:-http://llm:8080/v1}
+      - LLM_LOCAL_MODEL=${LLM_LOCAL_MODEL:-qwen3-4b-q4_k_m}
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
+      - OPENROUTER_MODEL=${OPENROUTER_MODEL:-qwen/qwen3-4b}
+      - OPENROUTER_BASE_URL=${OPENROUTER_BASE_URL:-https://openrouter.ai/api/v1}
+      - ASR_URL=http://asr:8001
+      - TTS_URL=http://tts:8002
+      - QDRANT_URL=http://qdrant:6333
+      - RERANKER_ENABLED=${RERANKER_ENABLED:-false}
+      - HF_HUB_OFFLINE=1
+      - TRANSFORMERS_OFFLINE=1

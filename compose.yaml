@@ -1,0 +1,169 @@
+name: we-assistant
+
+networks:
+  internal:
+    internal: true
+  default:
+
+volumes:
+  qdrant_data:
+
+services:
+  frontend:
+    build: ./frontend
+    ports:
+      - "127.0.0.1:8080:80"
+    networks:
+      - internal
+      - default
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+  backend:
+    build: ./backend
+    networks:
+      - internal
+    volumes:
+      - ./models/encoder:/models/encoder:ro
+      - ./config:/config:ro
+      - ./data:/data
+    environment:
+      - LLM_PROVIDER=${LLM_PROVIDER:-local}
+      - LLM_LOCAL_URL=${LLM_LOCAL_URL:-http://llm:8080/v1}
+      - LLM_LOCAL_MODEL=${LLM_LOCAL_MODEL:-qwen3-4b-q4_k_m}
+      - LLM_THREADS=${LLM_THREADS:-8}
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
+      - OPENROUTER_MODEL=${OPENROUTER_MODEL:-}
+      - OPENROUTER_BASE_URL=${OPENROUTER_BASE_URL:-https://openrouter.ai/api/v1}
+      - ASR_URL=http://asr:8001
+      - TTS_URL=http://tts:8002
+      - QDRANT_URL=http://qdrant:6333
+      - RERANKER_ENABLED=${RERANKER_ENABLED:-false}
+      - HF_HUB_OFFLINE=1
+      - TRANSFORMERS_OFFLINE=1
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    depends_on:
+      - llm
+      - asr
+      - tts
+      - qdrant
+    restart: unless-stopped
+
+  llm:
+    image: ghcr.io/ggml-org/llama.cpp:server
+    networks:
+      - internal
+    volumes:
+      - ./models/llm:/models:ro
+    command: >
+      --model /models/qwen3-4b-q4_k_m.gguf
+      --jinja
+      --ctx-size 4096
+      --threads ${LLM_THREADS:-8}
+      --host 0.0.0.0
+      --port 8080
+      --reasoning off
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:8080/health', timeout=3)\" || wget -q -O- http://localhost:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
+    restart: unless-stopped
+
+  asr:
+    build: ./services/asr
+    networks:
+      - internal
+    volumes:
+      - ./models/asr:/models:ro
+      - ./config:/config:ro
+    environment:
+      - ASR_MODEL=${ASR_MODEL:-large-v3-turbo}
+      - ASR_DEVICE=${ASR_DEVICE:-cpu}
+      - ASR_COMPUTE_TYPE=${ASR_COMPUTE_TYPE:-int8}
+      - HF_HUB_OFFLINE=1
+      - TRANSFORMERS_OFFLINE=1
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8001/health', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
+    restart: unless-stopped
+
+  tts:
+    build: ./services/tts
+    networks:
+      - internal
+    volumes:
+      - ./models/tts:/models:ro
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8002/health', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 15s
+    restart: unless-stopped
+
+  qdrant:
+    image: qdrant/qdrant:v1.11.3
+    networks:
+      - internal
+    volumes:
+      - qdrant_data:/qdrant/storage
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:6333/healthz', timeout=3)\""]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+    restart: unless-stopped
+
+  setup:
+    build: ./backend
+    profiles: ["setup"]
+    networks:
+      - internal
+      - default
+    volumes:
+      - ./models:/models
+      - ./config:/config
+      - ./data:/data
+    environment:
+      - QDRANT_URL=http://qdrant:6333
+    depends_on:
+      - qdrant
+
+  notebook:
+    build: ./backend
+    profiles: ["notebook"]
+    ports:
+      - "127.0.0.1:8888:8888"
+    networks:
+      - internal
+      - default
+    volumes:
+      - ./models/encoder:/models/encoder:ro
+      - ./config:/config:ro
+      - ./data:/data
+      - ./notebooks:/notebooks
+    environment:
+      - LLM_LOCAL_URL=http://llm:8080/v1
+      - ASR_URL=http://asr:8001
+      - TTS_URL=http://tts:8002
+      - QDRANT_URL=http://qdrant:6333
+    command: >
+      jupyter notebook --ip=0.0.0.0 --port=8888 --notebook-dir=/notebooks
+      --NotebookApp.token=${JUPYTER_TOKEN:-weassistant}
+    depends_on:
+      - llm
+      - asr
+      - tts
+      - qdrant

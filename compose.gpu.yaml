@@ -1,0 +1,43 @@
+# Overlay: run LLM + ASR on an NVIDIA GPU.
+# Usage: docker compose -f compose.yaml -f compose.gpu.yaml up
+# UNTESTED on this laptop: no NVIDIA GPU is present (section 0 of SPEC.md).
+# Validated only with: docker compose -f compose.yaml -f compose.gpu.yaml config
+
+services:
+  llm:
+    image: ghcr.io/ggml-org/llama.cpp:server-cuda
+    command: >
+      --model /models/${LLM_LOCAL_MODEL:-qwen3-4b-q4_k_m}.gguf
+      --jinja
+      --ctx-size 4096
+      --threads ${LLM_THREADS:-8}
+      --n-gpu-layers 99
+      --host 0.0.0.0
+      --port 8080
+      --reasoning off
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: ["gpu"]
+
+  asr:
+    build:
+      context: ./services/asr
+      args:
+        DEVICE: cuda
+    environment:
+      - ASR_MODEL=${ASR_MODEL:-large-v3-turbo}
+      - ASR_DEVICE=cuda
+      - ASR_COMPUTE_TYPE=float16
+      - HF_HUB_OFFLINE=1
+      - TRANSFORMERS_OFFLINE=1
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: ["gpu"]

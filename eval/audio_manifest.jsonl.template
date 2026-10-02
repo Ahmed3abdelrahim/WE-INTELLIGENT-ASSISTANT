@@ -1,0 +1,10 @@
+{"id": "ar_msa_01", "filename": "ar_msa_01.wav", "lang": "ar", "dialect": "msa", "condition": "clean", "transcript": "", "notes": ""}
+{"id": "ar_egy_01", "filename": "ar_egy_01.wav", "lang": "ar", "dialect": "egyptian", "condition": "clean", "transcript": "", "notes": ""}
+{"id": "ar_egy_02", "filename": "ar_egy_02.wav", "lang": "ar", "dialect": "egyptian", "condition": "noisy", "transcript": "", "notes": "background noise"}
+{"id": "ar_egy_codeswitch_01", "filename": "ar_egy_codeswitch_01.wav", "lang": "ar", "dialect": "egyptian", "condition": "code-switched", "transcript": "", "notes": "mixes English product/brand terms"}
+{"id": "en_01", "filename": "en_01.wav", "lang": "en", "dialect": "", "condition": "clean", "transcript": "", "notes": ""}
+{"id": "en_02", "filename": "en_02.wav", "lang": "en", "dialect": "", "condition": "noisy", "transcript": "", "notes": "background noise"}
+{"id": "en_accented_01", "filename": "en_accented_01.wav", "lang": "en", "dialect": "", "condition": "accented", "transcript": "", "notes": "Egyptian-accented English"}
+{"id": "ar_egy_03", "filename": "ar_egy_03.wav", "lang": "ar", "dialect": "egyptian", "condition": "clean", "transcript": "", "notes": ""}
+{"id": "ar_msa_02", "filename": "ar_msa_02.wav", "lang": "ar", "dialect": "msa", "condition": "noisy", "transcript": "", "notes": "background noise"}
+{"id": "en_03", "filename": "en_03.wav", "lang": "en", "dialect": "", "condition": "clean", "transcript": "", "notes": ""}

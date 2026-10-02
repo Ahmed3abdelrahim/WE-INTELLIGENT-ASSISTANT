@@ -1,0 +1,12 @@
+# Respellings applied before Arabic TTS so the Arabic Piper voice pronounces
+# English brand/product names reasonably. Keys are matched as whole words, case-insensitive.
+ar:
+  WE: "وي"
+  Wi-Fi: "واي فاي"
+  WiFi: "واي فاي"
+  SMS: "إس إم إس"
+  GB: "جيجا بايت"
+  MB: "ميجا بايت"
+  4G: "فور جي"
+  5G: "فايف جي"
+en: {}

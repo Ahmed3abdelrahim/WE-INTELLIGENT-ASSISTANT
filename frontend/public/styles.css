@@ -1,0 +1,11 @@
+/* Phase 4 builds the full layout; this is the Phase 0 placeholder. */
+:root {
+  --purple: #6b3fa0;
+}
+body {
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  background: #faf9fc;
+  color: #1a1a1a;
+  margin: 0;
+  padding: 2rem;
+}

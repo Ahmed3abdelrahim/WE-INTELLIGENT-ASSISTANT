@@ -1,0 +1,32 @@
+# Tunable knobs shared by backend + scripts. Env vars (.env) override provider/model selection;
+# this file holds retrieval/pipeline tuning that isn't secret and isn't per-environment.
+
+retrieval:
+  dense_top_k: 20
+  sparse_top_k: 20
+  final_top_k: 4
+  # Minimum fused RRF score to accept a retrieval as "sufficient evidence".
+  # Starting value; re-tuned in Phase 5 against eval/questions.jsonl and documented in eval/results.md.
+  min_score_threshold: 0.015
+  reranker_enabled: false
+  rerank_candidate_pool: 10
+
+chunking:
+  target_tokens: 450
+  overlap_tokens: 60
+
+context:
+  max_context_tokens: 2000
+  max_answer_tokens: 384
+
+history:
+  max_turns: 4
+
+uploads:
+  max_file_mb: 20
+  max_pdf_pages: 50
+
+crawl:
+  rate_limit_per_sec: 1
+  min_pages: 50
+  max_pages: 150

@@ -1,0 +1,8 @@
+# Transcripts matching these (substring, case-insensitive) are treated as ASR hallucinations
+# on silence/noise and rejected, asking the user to re-record.
+ترجمة نانسي قنقر
+ترجمة نانسي قنقرة
+subtitles by
+subscribe to
+أمتمنى لكم مشاهدة ممتعة
+نشكركم على المشاهدة

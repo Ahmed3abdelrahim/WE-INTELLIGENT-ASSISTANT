@@ -1,0 +1,12 @@
+# One hotword/phrase per line, passed to faster-whisper's `hotwords` param.
+# Seeded with WE Telecom Egypt product/brand terms likely to be misheard.
+WE
+WE Telecom Egypt
+تيداتا
+إنترنت المنزل
+فاتورة
+باقة
+إعادة شحن
+تجديد
+فودافون كاش
+واي فاي

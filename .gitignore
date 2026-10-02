@@ -1,0 +1,17 @@
+.env
+models/
+data/
+!data/.gitkeep
+*.pyc
+__pycache__/
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.ipynb_checkpoints/
+node_modules/
+*.log
+.DS_Store
+eval/audio/*.wav
+!eval/audio/.gitkeep
+.claude/
