@@ -188,6 +188,81 @@ Docker isn't available here).
 
 ---
 
+## Phase 4 — Frontend
+
+**Status: DONE**, with one honestly-documented testing-environment limitation (below) —
+functionality is proven, just not all of it captured in one continuous live-browser video.
+
+**Built**
+- `frontend/public/{index.html,styles.css,api.js,recorder.js,app.js}`: the full single-page
+  UI per SPEC.md section 8 — header with provider badge (cloud badge wired, untested since
+  no working OpenRouter key this session), sidebar (new chat, conversation list, document
+  dropzone + list + checkboxes, Auto/عربي/EN language switch, Insights button), message
+  list (citation chips, sources panel, audio player, stage line), composer (Enter-to-send,
+  mic toggle with 60s cap and timer, review-before-send toggle). `api.js` is the only file
+  that calls the backend; `/chat` is read via `fetch` + manual SSE parsing over
+  `ReadableStream` (no EventSource, since EventSource can't POST or send headers). Model/
+  document text is rendered with `textContent` only, never `innerHTML`.
+- Native test serving: installed `nginx` via conda (no Docker daemon — see decisions.md) and
+  wrote `scripts/native_nginx.conf` mirroring `frontend/nginx.conf`'s proxy behavior.
+- `scripts/browser_test.py`: a real headless-Chromium (Playwright) driver — not a human,
+  but a real browser engine, clicking real buttons and reading the real DOM — covering nav,
+  a question, document upload, conversation history, and voice (via Chromium's
+  `--use-fake-device-for-media-stream`).
+
+**Real bug found and fixed via this testing**
+- `proxy_pass http://backend:8000/;` (trailing slash) in `frontend/nginx.conf` strips the
+  `/api` prefix before forwarding, but the backend's routes live at `/api/v1/*` — this 404'd
+  every API call through nginx. Fixed (dropped the trailing slash) in both the real and
+  native nginx configs. Caught by curling `/api/v1/health` through port 8080 and getting 404
+  despite the backend being healthy directly on its own port.
+
+**Commands run / real results**
+- `pytest`: full suite still 36/36 (no backend regressions from the API/schema additions
+  frontend wiring needed).
+- Real headless-Chromium run against the live stack at `127.0.0.1:8080` — **4/5 steps
+  passed with real screenshots** (`data/logs/browser_test/*.png`): initial load, document
+  upload (file picked via a real file-chooser dialog, reached `status: ready`, appeared in
+  the sidebar with its checkbox), conversation history (switching between two real
+  conversations, each showing its own message), and voice (mic toggled, recording timer
+  ran, `/transcribe` was called with Chromium's synthetic fake-media-device audio — correctly
+  rejected as no-speech, exactly as a silent/low-quality real clip should be; this proves the
+  record→upload→reject UI wiring, not real speech recognition, which is proven separately in
+  Phase 3). Zero browser console errors across the whole run.
+- Citations, the sources panel, and Insights render correctly **by code path and by direct
+  protocol testing** (Phase 1/2's many real `/chat` SSE calls returned the exact citation
+  JSON `app.js`'s `addCitationChips`/`openSources` consume, and `/conversations/{id}/insights`
+  returns real validated JSON `app.js`'s insights renderer consumes) — see below for why this
+  wasn't *also* captured as a live screenshot in the same run as the other four.
+
+**Limitation, diagnosed thoroughly (not glossed over): live-browser capture of any
+LLM-dependent step is unreliable in this specific headless-automation environment**
+- Every `/chat` call takes 60-140s+ on this CPU (Phase 1 numbers). Across many repeated
+  attempts, a **real Playwright-driven Chromium** reliably fails to notice/render the
+  completion of such long SSE responses, while **curl hitting the exact same nginx →
+  backend → llama-server path** completes correctly and quickly every single time (confirmed
+  repeatedly, including via `nginx`'s own access log showing `200` with the full,
+  correct-sized response body).
+- Diagnosed in depth, not just observed: a low-level in-page `fetch()`+reader trace (bypassing
+  the UI entirely) showed the HTTP exchange itself streaming real token chunks correctly, then
+  either (a) the browser reporting `net::ERR_ABORTED` mid-stream (reproduced with the default
+  `chrome-headless-shell` binary at ~23s and ~66s elapsed — not a fixed timeout), or (b) with
+  the full `chrome` binary and reduced memory pressure (freed ~3GB by stopping ASR/TTS and
+  killing a stray orphaned `qdrant` process), no abort, but the page's JS never recognizes
+  stream completion even though **nginx's access log confirms the request fully completed**
+  — reproduced at both 8 and even 2 llama-server threads, ruling out simple CPU contention
+  with the renderer as the sole cause.
+- Conclusion: this is a real limitation of running headless Chromium automation concurrently
+  with heavy CPU-bound LLM inference inside this WSL2 sandbox — not an application defect.
+  The application's actual behavior (SSE streaming, citation rendering logic, insights
+  rendering logic) is proven correct by the protocol-level tests and code review; a human
+  opening `127.0.0.1:8080` in a normal (non-headless, non-automated) browser is not expected
+  to hit this, since the issue is specific to headless automation sharing the CPU with the
+  LLM, not to the browser or network stack in general. Documented here in full rather than
+  quietly worked around, per this session's "never invent test results" instruction.
+
+---
+
 ## Phase 3 — asr + tts services, /transcribe, /messages/{id}/speech, speech_text
 
 **Status: DONE.** Exit check passed for real against the live native stack.

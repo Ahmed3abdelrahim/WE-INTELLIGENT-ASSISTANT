@@ -34,12 +34,14 @@ QDRANT__STORAGE__STORAGE_PATH="$QDRANT_STORAGE" QDRANT__SERVICE__HTTP_PORT=6333 
   start qdrant "$STORE/bin/qdrant"
 
 # 2. LLM (llama-server, CPU)
+# Port 8081, not 8080: on this host (unlike in Docker, separate network namespaces) 8080
+# is reserved for the frontend/nginx per spec. See docs/decisions.md.
 LLM_GGUF="$REPO_ROOT/models/llm/qwen3-4b-q4_k_m.gguf"
 if [ -f "$LLM_GGUF" ]; then
   LD_LIBRARY_PATH="$STORE/bin/llama-b11323:$CONDA_PREFIX/lib" \
     start llm "$STORE/bin/llama-b11323/llama-server" \
     --model "$LLM_GGUF" --jinja --ctx-size 4096 --threads "$LLM_THREADS" \
-    --host 127.0.0.1 --port 8080 \
+    --host 127.0.0.1 --port 8081 \
     --reasoning off
 else
   echo "[native_up] WARNING: $LLM_GGUF not found, skipping llm (run 'make models' first)"
@@ -58,7 +60,7 @@ export TTS_MODELS_DIR="$REPO_ROOT/models/tts"
 
 # 5. Backend
 export LLM_PROVIDER="${LLM_PROVIDER:-local}"
-export LLM_LOCAL_URL="http://127.0.0.1:8080/v1"
+export LLM_LOCAL_URL="http://127.0.0.1:8081/v1"
 export LLM_LOCAL_MODEL="${LLM_LOCAL_MODEL:-qwen3-4b-q4_k_m}"
 export ASR_URL="http://127.0.0.1:8001"
 export TTS_URL="http://127.0.0.1:8002"

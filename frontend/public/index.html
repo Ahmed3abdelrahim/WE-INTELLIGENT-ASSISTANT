@@ -8,8 +8,80 @@
 </head>
 <body>
   <div id="app">
-    <p>WE Assistant — frontend skeleton (Phase 0). Full UI built in Phase 4.</p>
+    <header>
+      <h1>WE Assistant</h1>
+      <span id="provider-badge" class="provider-badge">local</span>
+    </header>
+    <div id="error-banner" class="error-banner hidden"></div>
+
+    <div class="layout">
+      <aside class="sidebar">
+        <button id="new-chat-btn" class="btn">+ New chat</button>
+
+        <div>
+          <h2>Conversations</h2>
+          <div id="conv-list" class="conv-list"></div>
+        </div>
+
+        <div>
+          <h2>Documents</h2>
+          <div id="dropzone" class="dropzone">
+            Drop a file here or click to upload<br />
+            <small>pdf, docx, txt, html, png, jpg</small>
+          </div>
+          <input id="file-input" type="file" accept=".pdf,.docx,.txt,.html,.htm,.png,.jpg,.jpeg" class="hidden" />
+          <div id="doc-list" class="doc-list" style="margin-top:0.5rem;"></div>
+        </div>
+
+        <div>
+          <h2>Language</h2>
+          <div class="lang-switch">
+            <button data-lang="auto" class="active">Auto</button>
+            <button data-lang="ar">عربي</button>
+            <button data-lang="en">EN</button>
+          </div>
+        </div>
+
+        <div>
+          <button id="insights-btn" class="btn-ghost" style="width:100%;">Insights</button>
+        </div>
+      </aside>
+
+      <main class="main">
+        <div id="messages" class="messages"></div>
+        <div id="stage-line" class="stage-line"></div>
+
+        <div class="composer">
+          <div class="composer-row">
+            <button id="mic-btn" class="mic-btn" title="Record voice">🎤</button>
+            <textarea id="composer-input" rows="1" placeholder="Ask WE Assistant anything..."></textarea>
+            <button id="send-btn" class="btn">Send</button>
+          </div>
+          <div class="composer-footer">
+            <span id="rec-timer" class="rec-timer"></span>
+            <label><input id="review-toggle" type="checkbox" /> Review voice transcript before sending</label>
+          </div>
+        </div>
+      </main>
+    </div>
   </div>
+
+  <div id="sources-overlay" class="overlay hidden">
+    <div class="drawer">
+      <button class="drawer-close" data-close="sources-overlay">✕</button>
+      <h3>Sources</h3>
+      <div id="sources-content"></div>
+    </div>
+  </div>
+
+  <div id="insights-overlay" class="overlay hidden">
+    <div class="drawer">
+      <button class="drawer-close" data-close="insights-overlay">✕</button>
+      <h3>Conversation Insights</h3>
+      <div id="insights-content"></div>
+    </div>
+  </div>
+
   <script src="api.js"></script>
   <script src="recorder.js"></script>
   <script src="app.js"></script>
