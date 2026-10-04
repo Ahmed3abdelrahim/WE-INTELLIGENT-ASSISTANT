@@ -281,6 +281,9 @@ async def post_documents(
                 }
             )
         upsert_chunks(payloads, embeddings["dense"], embeddings["sparse"])
+        # SPEC.md section 5: keep the original under data/uploads/, UUID-named (never the
+        # user's filename, so no path tricks). Written only after a successful ingest.
+        (config.UPLOADS_DIR / f"{did}.{doc_type}").write_bytes(data)
 
         pages = max((c.get("page") or 0 for c in chunks), default=0) or None
         await update_document(did, "ready", pages=pages, chunks=len(payloads))
