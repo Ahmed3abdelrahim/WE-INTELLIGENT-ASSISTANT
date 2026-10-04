@@ -42,6 +42,8 @@ class Config:
 
     # --- Retrieval / pipeline ---
     RERANKER_ENABLED = os.environ.get("RERANKER_ENABLED", "false").lower() == "true"
+    # "cpu" (default) or "cuda" / "cuda:0"; fp16 is used automatically on GPU.
+    EMBED_DEVICE = os.environ.get("EMBED_DEVICE", "cpu")
     DENSE_TOP_K = SETTINGS["retrieval"]["dense_top_k"]
     SPARSE_TOP_K = SETTINGS["retrieval"]["sparse_top_k"]
     FINAL_TOP_K = SETTINGS["retrieval"]["final_top_k"]

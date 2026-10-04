@@ -2,6 +2,7 @@
 from ..config import config
 
 _model = None
+_USE_FP16 = config.EMBED_DEVICE.startswith("cuda")
 
 
 def get_model():
@@ -9,7 +10,9 @@ def get_model():
     if _model is None:
         from FlagEmbedding import BGEM3FlagModel
 
-        _model = BGEM3FlagModel(str(config.MODELS_ENCODER_DIR / "bge-m3"), use_fp16=False, devices=["cpu"])
+        _model = BGEM3FlagModel(
+            str(config.MODELS_ENCODER_DIR / "bge-m3"), use_fp16=_USE_FP16, devices=[config.EMBED_DEVICE]
+        )
     return _model
 
 
@@ -42,7 +45,7 @@ def get_reranker():
         from FlagEmbedding import FlagReranker
 
         _reranker = FlagReranker(
-            str(config.MODELS_ENCODER_DIR / "bge-reranker-v2-m3"), use_fp16=False, devices=["cpu"]
+            str(config.MODELS_ENCODER_DIR / "bge-reranker-v2-m3"), use_fp16=_USE_FP16, devices=[config.EMBED_DEVICE]
         )
     return _reranker
 

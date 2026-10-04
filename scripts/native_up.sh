@@ -6,14 +6,27 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-STORE="/home/ahmed/we-assistant-store"
+STORE="${STORE:-/home/ahmed/we-assistant-store}"
+LLAMA_DIR="${LLAMA_DIR:-$STORE/bin/llama-b11323}"
 PIDFILE="$REPO_ROOT/data/logs/native_pids.txt"
 LOGDIR="$REPO_ROOT/data/logs"
 mkdir -p "$LOGDIR"
 : > "$PIDFILE"
 
-source /home/ahmed/miniforge3/etc/profile.d/conda.sh
-conda activate we
+# Python env: an already-activated venv (VIRTUAL_ENV) wins; otherwise the laptop's conda env.
+if [ -z "${VIRTUAL_ENV:-}" ]; then
+  source /home/ahmed/miniforge3/etc/profile.d/conda.sh
+  conda activate we
+fi
+
+# GPU switches (all default to the CPU behaviour). LLM_NGL=99 offloads every layer.
+export LLM_NGL="${LLM_NGL:-0}"
+# llama-server keeps a host-RAM prompt cache that fills up to 8 GiB by default before evicting;
+# cap it so it can't take half the machine's RAM (0 disables it).
+export LLM_CACHE_RAM="${LLM_CACHE_RAM:-1024}"
+export EMBED_DEVICE="${EMBED_DEVICE:-cpu}"
+# Reranker: better ranking + the evidence gate (min_rerank_score). Cheap on GPU, slow on CPU.
+export RERANKER_ENABLED="${RERANKER_ENABLED:-false}"
 
 export HF_HOME="$STORE/hf-cache"
 export HF_HUB_OFFLINE=1
@@ -38,9 +51,10 @@ QDRANT__STORAGE__STORAGE_PATH="$QDRANT_STORAGE" QDRANT__SERVICE__HTTP_PORT=6333 
 # is reserved for the frontend/nginx per spec. See docs/decisions.md.
 LLM_GGUF="$REPO_ROOT/models/llm/qwen3-4b-q4_k_m.gguf"
 if [ -f "$LLM_GGUF" ]; then
-  LD_LIBRARY_PATH="$STORE/bin/llama-b11323:$CONDA_PREFIX/lib" \
-    start llm "$STORE/bin/llama-b11323/llama-server" \
+  LD_LIBRARY_PATH="$LLAMA_DIR:${CONDA_PREFIX:-}/lib" \
+    start llm "$LLAMA_DIR/llama-server" \
     --model "$LLM_GGUF" --jinja --ctx-size 4096 --threads "$LLM_THREADS" \
+    --n-gpu-layers "$LLM_NGL" --cache-ram "$LLM_CACHE_RAM" \
     --host 127.0.0.1 --port 8081 \
     --reasoning off
 else
