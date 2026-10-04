@@ -1,6 +1,6 @@
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class HealthResponse(BaseModel):
@@ -38,12 +38,24 @@ class MessageOut(BaseModel):
     created_at: str
 
 
+# A question plus up to ~2k tokens of sources must fit one LLM slot (4096 tokens).
+MAX_QUESTION_CHARS = 2000
+
+
 class ChatRequest(BaseModel):
     conversation_id: str
-    text: str
+    text: str = Field(max_length=MAX_QUESTION_CHARS)
     input_mode: Literal["voice", "text"] = "text"
     lang: Literal["auto", "ar", "en"] = "auto"
     doc_ids: list[str] = []
+
+    @field_validator("text")
+    @classmethod
+    def not_blank(cls, v: str) -> str:
+        # An empty message used to reach the router and come back as a "refused" reply.
+        if not v.strip():
+            raise ValueError("message is empty")
+        return v
 
 
 class Citation(BaseModel):
