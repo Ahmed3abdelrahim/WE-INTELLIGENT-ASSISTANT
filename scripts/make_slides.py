@@ -56,102 +56,100 @@ add_slide("Requirements", [
     "On-prem, bilingual (Arabic / English / Egyptian dialect) RAG assistant for WE Telecom Egypt",
     "Voice or text in, grounded + cited answer out; voice questions also get a spoken reply",
     "Users can upload documents (PDF/DOCX/TXT/HTML/images) to query",
-    "Build constraint: 2-day case-study PoC, laptop hardware, CPU only, no GPU",
+    "Build constraint: 2-day case-study PoC on CPU-only laptop hardware; later verified on an NVIDIA RTX 3080",
     "Default must stay fully local; cloud LLM is opt-in, comparison-only, never the demo default",
 ])
 
 # 2. Architecture
 add_slide("Architecture: 6 Containers", [
     "frontend (nginx) — static UI + reverse proxy, the only container with a published host port",
-    "backend (FastAPI) — orchestration, RAG, ingestion, OCR, embeddings, SQLite",
-    "llm (llama.cpp server) — Qwen3-4B Q4_K_M GGUF",
-    "asr (faster-whisper) — large-v3-turbo, int8, CPU",
+    "backend (FastAPI) — guardrails, routing, RAG, ingestion, OCR, embeddings + reranker, SQLite",
+    "llm (llama.cpp server) — Qwen3-4B Q4_K_M GGUF, 4 parallel slots x 4096 tokens",
+    "asr (faster-whisper) — large-v3-turbo (int8 on CPU, fp16 on GPU)",
     "tts (Piper) — English + Arabic voices",
     "qdrant — hybrid dense+sparse vector search",
-    "All inter-service traffic on an internal-only Docker network",
-    "  On this build laptop: no Docker daemon available — verified instead as native host processes on the same ports (docs/decisions.md); every Dockerfile/compose file is real and spec-complete",
+    "All inter-service traffic on an internal-only network",
+    "  Verified as native host processes on the same ports (no Docker daemon on either test machine); compose files config-validated",
 ])
 
 # 3. Ingestion and Arabic PDF handling
 add_slide("Ingestion and Arabic PDF Handling", [
-    "te.eg crawled for real: 106 pages (95 Arabic, 11 English), robots.txt-respecting, 1 req/s",
-    "  Found & fixed: a shared cookie jar let te.eg's language cookie leak across requests, flipping Arabic pages to English — fixed with isolated sessions per language track",
-    "PDF: per-page extraction (PyMuPDF) → NFKC normalize → garbled-Arabic detection → 300 DPI render + Tesseract OCR fallback",
-    "  Verified end-to-end on real fixtures: a clean text-layer PDF, a scanned (image-only) English PDF, and an image-only Arabic PDF — all three ingested and became answerable",
-    "DOCX (incl. tables), TXT (UTF-8 + cp1256 fallback), HTML, and images (direct OCR) also implemented and tested",
-    "322 chunks embedded (BAAI/bge-m3) and indexed into Qdrant from the te.eg crawl alone",
+    "te.eg crawled: 106 pages (95 Arabic, 11 English), robots.txt-respecting, 1 req/s; isolated sessions per language (a shared cookie jar flipped Arabic pages to English)",
+    "PDF: PyMuPDF per page → garbled-Arabic detection → 300 DPI render + Tesseract ara+eng OCR fallback",
+    "Scanned Arabic and English PDFs, DOCX tables, TXT (cp1256 fallback), HTML, images — all answerable (heavy test)",
+    "Price tables with merged header cells (colspan/rowspan) expanded into per-column headers — fixed 'col3: 775' garbage",
+    "Chunking: ~450 tokens, FAQ pairs and tables kept whole when they fit, oversized ones split on rows/sentences — 360 chunks, max 509 tokens",
+    "Uploads: injection sentences stripped, originals saved as data/uploads/<uuid>, private to the uploading session",
 ])
 
 # 4. Hybrid retrieval, with ablation results
 add_slide("Hybrid Retrieval — Ablation Results", [
-    "Dense (bge-m3) + sparse (lexical weights), fused with Reciprocal Rank Fusion (RRF)",
+    "Dense (bge-m3) + sparse (lexical weights), fused with Reciprocal Rank Fusion, reranked by bge-reranker-v2-m3",
     "Measured on 20 real answerable questions (eval/questions.jsonl, facts copied from crawled text):",
-    "  Dense only:        Recall@4 = 0.95,  MRR = 0.825",
-    "  Hybrid (RRF):      Recall@4 = 0.95,  MRR = 0.662",
+    "  Dense only:        Recall@4 = 0.95,  MRR = 0.85",
+    "  Hybrid (RRF):      Recall@4 = 0.95,  MRR = 0.642",
     "  Hybrid + rerank:   Recall@4 = 0.95,  MRR = 0.825",
-    "Finding: RRF fusion alone can push the best result down in rank versus dense-only; reranking (bge-reranker-v2-m3) recovers full ranking quality",
-    "Reranker is CPU-expensive per call — kept default-off per spec, enabled selectively where ranking precision matters more than latency",
+    "RRF alone pushes the best passage down; reranking recovers it — and its 0-1 score is the evidence gate",
+    "RRF scores are rank-based (rank 1 ≈ 1/61), so the old RRF threshold rejected almost nothing; the reranker gate (0.02) separates off-topic (~0.001) from answerable (≥ 0.25)",
 ])
 
 # 5. Grounding and citations
-add_slide("Grounding and Citations", [
-    "Every fact must cite a numbered source [S#]; sources are data to read, never instructions to follow",
-    "Post-generation validator: drops unknown [S#] labels, flags numbers absent from any cited source",
-    "Arabic-Indic digit normalization (found via testing — ١١١ vs 111 was a false-positive source)",
-    "A factual answer with zero valid citations is downgraded to insufficient_evidence",
-    "Caught a real model hallucination in testing: the LLM stated a support phone number not present in its cited source — the validator flagged it correctly",
-    "Retrieval-score gate returns insufficient_evidence before even calling the LLM when evidence is weak",
+add_slide("Grounding, Citations and Guardrails", [
+    "Every fact cites a numbered source; sources are tagged official (te.eg) or uploaded, and are data, never instructions",
+    "Validator drops unknown [S#] labels and flags numbers absent from the cited sources (list numbering and Arabic-Indic digits handled)",
+    "Guardrails: small-talk shortcut → regex injection pre-filter → LLM router (off_topic / injection / question + clean standalone query) → reranker evidence gate",
+    "Answer prompt gets only the standalone query (passing chat history made the 4B model answer one turn late)",
+    "Output checks: wrong language/script → one regeneration; system-prompt leak → withheld",
+    "Heavy test: 10/10 off-topic and 7/7 injection refused, 10/10 tricky legitimate questions answered; te.eg preferred over a conflicting upload, with both stated",
 ])
 
 # 6. Speech: ASR comparison and TTS
-add_slide("Speech: ASR and TTS", [
-    "ASR: faster-whisper large-v3-turbo (default) vs large-v3, both downloaded for comparison",
-    "Real /transcribe tests: clean English, Egyptian Arabic, and noise-injected English clips all transcribed correctly; silence correctly rejected (no_speech_detected)",
-    "TTS: Piper, English (en_US-lessac-medium) + Arabic (ar_JO-kareem-medium) voices",
-    "speech_text.py strips citations/markdown/URLs, verbalizes numbers (num2words), respells English brand names for the Arabic voice",
-    "Limitation, stated honestly: Piper's Arabic voice is noticeably more robotic than English — Chatterbox (GPU-only) is the production-roadmap upgrade",
-    "Full WER/CER ablation (beam 1 vs 5, with/without hotwords) pending real recorded clips from Ahmed — synthetic clips used for plumbing only",
+add_slide("Speech: ASR Comparison and TTS", [
+    "ASR: faster-whisper large-v3-turbo (deployed) vs large-v3, beam 1/5, telecom hotwords on/off — eval/asr_eval.py",
+    "Synthetic TTS clips (plumbing check): deployed setting lowest WER (13.1%) and fastest; EN and MSA exact; large-v3 not better",
+    "Hotword-echo guard: Whisper sometimes returned its own hotword prompt on clipped audio — detected and re-transcribed",
+    "TTS: Piper, English (en_US-lessac-medium) + Arabic (ar_JO-kareem-medium); speech_text.py strips citations, verbalizes numbers, respells brand names",
+    "Real recorded clips (Egyptian dialect, noise, code-switching) still to be collected — eval/RECORDING_CHECKLIST.md",
+    "Limitation: Piper's Arabic voice is more robotic than English — a better Arabic/Egyptian voice is on the roadmap",
 ])
 
 # 7. On-prem and offline deployment
 add_slide("On-Prem, Offline, and Why CPU-Sized Models", [
-    "HF_HUB_OFFLINE=1 / TRANSFORMERS_OFFLINE=1 everywhere; models load from local disk only at runtime",
-    "Every inference call (LLM/ASR/TTS/Qdrant/embeddings) observed going to 127.0.0.1 only",
-    "Qwen3-4B chosen over larger models specifically to keep CPU latency bounded on laptop hardware",
-    "int8 ASR, CPU-tuned thread counts (physical cores), reranker default-off — every choice tuned for CPU",
+    "HF_HUB_OFFLINE=1 / TRANSFORMERS_OFFLINE=1 everywhere; models load from local disk only; every call goes to 127.0.0.1",
+    "Qwen3-4B Q4 chosen to keep CPU latency bounded; the same models run unchanged on a GPU",
+    "CPU laptop: ~66 s p50 per answer.  RTX 3080: 1.2 s p50 — LLM, ASR, embedder and reranker on the GPU",
+    "GPU memory (measured): LLM 3.96 GB, ASR 2.5 GB, embedder 1.9 GB, reranker +0.9 GB → 9.2 GB for the app; 24 GB cards run eval alongside",
     "Cloud (OpenRouter) is opt-in only, with a visible 'data leaves this machine' badge — never the default",
 ])
 
 # 8. Evaluation results
 add_slide("Evaluation Results", [
-    "25 real questions (10 EN, 10 AR mixing MSA/Egyptian, 5 unanswerable) — facts copied from crawled text, not generated",
-    "Retrieval: Recall@4 = 0.95 across dense/hybrid/hybrid+rerank (see slide 4 for the MRR ablation)",
-    "Real /chat answers verified for EN, Egyptian dialect, and MSA questions — all correctly cited",
-    "Off-topic question correctly abstains (insufficient_evidence), verified live",
-    "LLM latency is the dominant cost: ~80-140s per answer on this CPU (4B model, ~2k-token context, 8 threads) — see eval/results.md for the full pipeline run's p50/p95",
-    "Local vs OpenRouter comparison: not run this session (no working API key provided — see docs/decisions.md)",
+    "25 real questions (10 EN, 10 AR mixing MSA/Egyptian, 5 unanswerable) — facts copied from crawled text",
+    "CPU baseline: 19/20 answered with citations, 2/5 unanswerable refused, p50 66.5 s / p95 100.7 s",
+    "GPU + guardrails: 20/20 answered with citations, 5/5 refused, p50 1.2 s / p95 1.9 s",
+    "8 simultaneous users: 32/32 answered, p50 5.8 s (after sizing llama-server's KV pool per slot)",
+    "Heavy system test 49/49, 101 unit + 6 live tests, GPU soak test without memory growth",
+    "Local vs OpenRouter comparison: not run — the provided API key was rejected (401)",
 ])
 
 # 9. Limitations
 add_slide("Limitations", [
-    "No Docker daemon on the build laptop — container paths real but untested here; native fallback used for all verification",
-    "LLM answer latency (60-140s) is high for a live demo — inherent to CPU-only 4B-model serving with a full RAG context",
-    "No real recorded audio clips yet — WER/CER numbers pending Ahmed's recordings",
-    "OpenRouter comparison unavailable — no working API key this session",
-    "Arabic OCR accuracy imperfect on synthetic (non-photographic) renders — numbers and word content recovered correctly, letter-level reordering observed",
-    "Piper's Arabic voice quality is noticeably behind its English voice",
-    "Headless-browser automated E2E testing of long-LLM-wait flows is unreliable in this specific sandbox (thoroughly diagnosed, documented as an automation-environment limitation, not an app defect)",
+    "Containers never run (no Docker daemon on either machine) — native processes used; Docker backend image uses CPU torch",
+    "No real recorded audio yet — ASR accuracy measured on synthetic TTS speech only",
+    "CPU latency ~1-2 min per answer; the router's extra LLM call on CPU not re-measured",
+    "10 GB GPUs are tight: re-indexing or eval needs the backend stopped",
+    "A conflicting upload is only flagged when the official passage is also retrieved",
+    "4B-model quirks (own unit conversions, language drift) need the validator and reminders; Piper's Arabic voice lags English",
 ])
 
 # 10. Production roadmap
 add_slide("Production Roadmap", [
-    "GPU serving (vLLM, larger Qwen) — compose.gpu.yaml already written, untested (no GPU on this laptop)",
-    "Chatterbox or a dedicated Egyptian Arabic TTS voice, once GPU-served",
-    "PaddleOCR or a VLM-based OCR path for better Arabic scanned-document accuracy",
-    "Postgres instead of SQLite for multi-instance scale",
-    "SSO / RBAC instead of the demo's session-id scoping",
-    "Queue workers for ingestion at scale (currently synchronous)",
-    "Production monitoring/observability",
+    "24 GB GPU (RTX 3090) and a larger model (Qwen3-8B) evaluated on the same question set; vLLM for many concurrent users",
+    "Chatterbox or a dedicated Egyptian Arabic TTS voice",
+    "PaddleOCR or a VLM-based OCR path for harder scanned documents",
+    "Postgres instead of SQLite; queue workers for ingestion at scale",
+    "SSO / RBAC instead of session-id scoping",
+    "Auto-restarting services, CUDA backend image, monitoring/observability",
     "Whisper fine-tuning on real telecom-support audio",
     "Human handoff path for needs_escalation conversations",
 ])

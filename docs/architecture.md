@@ -1,16 +1,16 @@
 # Architecture
 
-## Containers (per `compose.yaml`)
+## Services (per `compose.yaml`; the same processes run natively via `scripts/native_up.sh`)
 
 ```
                  ┌──────────────┐
   browser ──────▶│   frontend    │  nginx: static files (/) + reverse proxy (/api/)
-                 │  (nginx)      │  only container with a published host port (8080)
+                 │  (nginx)      │  only service with a published host port (8080)
                  └──────┬────────┘
                         │ internal network (internal: true)
                  ┌──────▼────────┐
-                 │   backend     │  FastAPI: orchestration, RAG, ingestion, OCR,
-                 │  (FastAPI)    │  embeddings (BAAI/bge-m3 + reranker), SQLite
+                 │   backend     │  FastAPI: guardrails, routing, RAG, ingestion, OCR,
+                 │  (FastAPI)    │  embeddings + reranker (bge-m3 / bge-reranker-v2-m3), SQLite
                  └──┬───┬───┬────┘
                     │   │   │
         ┌───────────┘   │   └───────────┐
@@ -23,76 +23,91 @@
                         │
                         ▼
                   ┌──────────┐
-                  │  qdrant  │  vector DB: named vectors dense+sparse
+                  │  qdrant  │  vector DB: named vectors dense + sparse
                   └──────────┘
 ```
 
-All inter-service traffic stays on the `internal` Docker network (`internal: true` — no
-default-route egress). Only `frontend` also joins the default network, which it needs
-purely to publish its port to the host. Under `compose.cloud.yaml`, `backend` additionally
-joins the default network for egress to `openrouter.ai` when `LLM_PROVIDER=openrouter`.
+All inter-service traffic stays on the `internal` network (no egress). Only `frontend` joins
+the default network, to publish its port; under `compose.cloud.yaml` the backend also gets
+egress to `openrouter.ai`.
 
-**On this build machine**, no Docker daemon was available, so every phase was instead
-verified with the same backend/service code running as native host processes
-(`scripts/native_up.sh`) on the same ports the containers would use — see
-`docs/decisions.md` for the full diagnosis. The architecture above is what's actually
-specified and built (every Dockerfile and compose file is real); only the *runtime* used
-for verification differed.
+Both verification environments (CPU laptop, RTX 3080 GPU container) ran these services as
+native host processes on the same ports, because neither had a usable Docker daemon.
 
-## Request flow: a text/voice question
+**llama-server concurrency**: `--parallel 4` slots with a pool of 4 × 4096 tokens (`q8_0` KV
+cache, flash attention). Slots share one KV pool, so the pool must be sized per slot; with the
+old fixed `--ctx-size 4096`, two simultaneous RAG questions exhausted it.
 
-1. **Frontend** (`app.js`) posts to `/api/v1/chat` (text) or first to `/api/v1/transcribe`
-   (voice) then `/api/v1/chat` with the transcript. `api.js` is the only file that talks to
-   the backend; the SSE response is read manually via `fetch` + `ReadableStream` (not
-   `EventSource`, which can't POST or send custom headers).
-2. **Backend pipeline** (`backend/app/pipeline.py`, orchestrating `backend/app/{ingestion,
-   retrieval,generation}/`):
-   - Resolve language (UI choice, or Arabic-script-ratio heuristic on the text).
-   - Load last 4 turns of history; if this isn't the first turn, one LLM call rewrites the
-     question as a standalone query (preserving numbers/entities/negation).
-   - Encode the (rewritten) query with `BAAI/bge-m3` (dense 1024-d + sparse lexical
-     weights), hybrid-search Qdrant: dense top-20 + sparse top-20 prefetch, fused with RRF,
-     filter (`source_type=official OR (session_id=S AND doc_id IN selected)`) applied
-     *inside each prefetch* so cross-session leakage is structurally impossible, not just
-     filtered after the fact.
-   - If the top fused score is below a tuned threshold, return `insufficient_evidence`
-     **without calling the LLM** (see `eval/results.md` for how the threshold was chosen).
-   - Otherwise build a numbered source context (`[S1] title | url p.N` + text, capped
-     ~2k tokens) and stream a grounded answer from the LLM (local llama.cpp or OpenRouter,
-     one client in `backend/app/clients/llm.py`, provider only changes base URL/key/model).
-   - Validate the raw answer (`backend/app/generation/citations.py`): drop unknown `[S#]`
-     labels, flag numbers in the answer that don't appear in any cited source (with
-     Arabic-Indic digit normalization), downgrade to `insufficient_evidence` if a factual
-     answer ends up with zero valid citations.
-   - Persist the message + per-stage timings to SQLite, emit the SSE `final` event.
-3. **Voice replies**: the frontend separately calls `/api/v1/messages/{id}/speech`, which
-   cleans the stored answer text (`speech_text.py`: strip citations/markdown/URLs, verbalize
-   numbers with `num2words`, respell English brand names for the Arabic voice via
-   `config/tts_lexicon.yaml`) and calls the TTS service. A TTS failure never removes the
-   already-shown text.
+## Request flow: a text or voice question
+
+1. **Frontend** (`app.js`) posts to `/api/v1/chat`, or for voice first to `/api/v1/transcribe`.
+   `api.js` is the only file that talks to the backend; the SSE stream is read with `fetch` +
+   `ReadableStream` and parsed per the SSE spec (CRLF, LF or CR line endings).
+2. **Transcription** (`/transcribe`): faster-whisper with telecom hotwords; silence and known
+   Whisper hallucinations are rejected; if the transcript is mostly the hotword prompt read
+   back, it is transcribed again without hotwords.
+3. **Pipeline** (`backend/app/pipeline.py`), cheapest checks first:
+   1. Resolve the answer language (UI setting, or Arabic-script ratio).
+   2. **Small talk** (`generation/smalltalk.py`): greetings, "who are you", thanks, goodbye →
+      fixed reply, no retrieval, no LLM. Only when the whole message is small talk.
+   3. **Injection pre-filter** (`generation/guard.py`): regex for phrasing aimed at the
+      assistant's own instructions (EN + AR) → refusal, no LLM call.
+   4. **Router** (`generation/answer.py: route_query`): one short LLM call returns
+      `{type: question | smalltalk | off_topic | injection, query}`. History is passed as quoted
+      text, never as chat turns. The query is standalone, typo-free, dialect turned into MSA,
+      same language as the question. Unusable router output falls back to "question with the
+      original text" — the router can never block a real question by misbehaving.
+   5. **Retrieval** (`retrieval/search.py`): bge-m3 dense + sparse prefetch (top 20 each) fused
+      with RRF in Qdrant, filter `source_type=official OR (session_id=S AND doc_id IN selected)`
+      applied inside each prefetch (cross-session leakage is structurally impossible), then
+      reranked by bge-reranker-v2-m3 to the final 4.
+   6. **Evidence gate**: the top reranker score must reach `min_rerank_score` (0.02; off-topic
+      queries score ~0.000-0.002). Without the reranker, the older RRF threshold applies.
+   7. **Answer**: system prompt + sources in `<source label="S1" origin="official te.eg">`
+      blocks (uploads tagged `origin="uploaded by the user"`, tags inside source text defanged),
+      then the standalone question, then reminders at the end: the answer language, and — if
+      official and uploaded sources are both present — "official first, then what the document
+      says". Context capped at ~2k tokens; no chat history.
+   8. **Output checks**: wrong language or foreign script → one temperature-0 regeneration;
+      system-prompt fingerprint in the answer → refusal; citation validation drops unknown
+      `[S#]` labels and flags numbers not present in the cited sources (list numbering and
+      Arabic-Indic digits handled).
+   9. Persist the message with per-stage timings to SQLite; emit the SSE `final` event.
+4. **Spoken reply**: `/api/v1/messages/{id}/speech` cleans the stored answer (`speech_text.py`:
+   strip citations/markdown/URLs, verbalise numbers, respell brand names for the Arabic voice)
+   and calls TTS. A TTS failure never removes the text.
 
 ## Ingestion
 
-- **Website** (`backend/app/ingestion/crawl_te.py` + `scripts/ingest_website.py`): BFS crawl
-  of te.eg from sitemap/about-te seeds, robots.txt-respecting, 1 req/s, two independent
-  `httpx.Client` sessions (bare-path vs `/en/`-path — found during testing that a single
-  shared cookie jar let te.eg's language-preference cookie "stick" after the first `/en/`
-  page, silently flipping later bare-path pages to English too).
-- **Uploads** (`backend/app/api.py` `/documents` + `backend/app/ingestion/loaders.py`):
-  extension+magic-byte validated, size/page-count limited, then dispatched to a per-type
-  loader (PDF via PyMuPDF with per-page garbled-Arabic detection → 300 DPI render → Tesseract
-  OCR fallback; DOCX walking `document.element.body` in order; TXT with cp1256 fallback;
-  HTML via BeautifulSoup; images via direct OCR).
-- **Chunking** (`backend/app/ingestion/chunking.py`): heading/paragraph-aware, ~450 bge-m3
-  tokens with ~60 overlap, keeping each FAQ question with its answer and each table's rows
-  together as one atomic unit; page/OCR flags propagate through to the final chunk for
-  accurate citations.
+- **Website** (`ingestion/crawl_te.py`, `scripts/ingest_website.py`): robots.txt-respecting BFS
+  crawl of te.eg at 1 request/s with separate sessions for Arabic and English paths.
+- **Uploads** (`api.py /documents`, `ingestion/loaders.py`): extension + magic-byte check,
+  size/page limits, per-type loader (PDF via PyMuPDF with garbled-Arabic detection → 300 DPI
+  render → Tesseract `ara+eng` OCR; DOCX in body order; TXT with cp1256 fallback; HTML via
+  BeautifulSoup; images via OCR). Sentences addressing the assistant's instructions are
+  stripped. The original is saved as `data/uploads/<uuid>.<type>` after a successful ingest.
+- **Tables** (HTML): `colspan`/`rowspan` expanded into a grid; leading header rows combined per
+  column; output one line per row, e.g. `Fixed Internet Bundle: Super 250 GBs, WE Gold & Fixed
+  Internet Upgrade Fees (in EGP): 260 = 135; 525 = 135; 775 = Free`.
+- **Chunking** (`ingestion/chunking.py`): ~450 bge-m3 tokens with ~60 overlap; FAQ question +
+  answer and each table kept together when they fit; anything larger split on row, then
+  sentence, then word boundaries; section and page carried to every chunk.
+
+## Frontend
+
+Static files served by nginx: `index.html`, `styles.css` (theme tokens, logical properties for
+RTL), `i18n.js` (English/Arabic strings), `icons.js` (inline SVG icons), `api.js`, `recorder.js`
+(MediaRecorder; keeps the mic stream warm for 60 s after a recording), `app.js`. Model and
+document text is only ever inserted as text nodes. Settings (interface language, theme, answer
+language) are stored per browser.
 
 ## Data
 
-- **Qdrant** collection `we_chunks`: named vectors `dense` (1024-d, cosine) + `sparse`
-  (lexical weights), payload-indexed on `source_type`/`session_id`/`doc_id`.
-- **SQLite** (WAL): `conversations`, `messages` (with JSON citations/timings columns),
-  `documents` (per-session upload status).
+- **Qdrant** `we_chunks`: named vectors `dense` (1024-d, cosine) + `sparse`, payload-indexed on
+  `source_type` / `session_id` / `doc_id`.
+- **SQLite** (WAL): `conversations` (title falls back to the first question; rename/delete are
+  session-scoped), `messages` (citations and timings as JSON), `documents`.
+- **Files**: `data/uploads/` (originals), `data/audio/` (spoken replies, deleted with their
+  conversation), `data/logs/`.
 
-See `docs/SPEC.md` for the complete original spec this was built against.
+See `SPEC.md` for the original spec.

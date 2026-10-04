@@ -2,183 +2,195 @@
 
 A bilingual (Arabic / English / Egyptian dialect) retrieval-augmented assistant for WE
 Telecom Egypt. Users ask by voice or text and get a grounded, cited answer; voice questions
-also get a spoken reply. Users can upload documents (PDF/DOCX/TXT/HTML/images) to query.
+also get a spoken reply. Users can upload documents (PDF/DOCX/TXT/HTML/images) and ask about
+them. Everything runs on-prem: no model call leaves the machine in the default mode.
 
-This is a 2-day case-study PoC, built to run fully on-prem on CPU-only hardware. See
-`docs/SPEC.md` for the full build spec, `docs/progress.md` for a phase-by-phase build log
-with real measured results, and `docs/decisions.md` for every environment-driven decision
-made along the way (all logged with a one-line reason).
+It runs on CPU only (the original 2-day build target) and on an NVIDIA GPU, where answers
+take ~1-2 seconds instead of ~1-2 minutes. See `SPEC.md` for the build spec,
+`docs/FINAL_REPORT.md` for the summary, `docs/progress.md` for the phase-by-phase build log
+with real measured results, and `docs/decisions.md` for every non-obvious decision.
+
+## What it does
+
+- **Grounded answers with citations** from 106 crawled te.eg pages (Arabic + English) and the
+  user's own uploads: hybrid dense+sparse retrieval (bge-m3), reranking (bge-reranker-v2-m3),
+  answers from Qwen3-4B with numbered source badges and a per-document Sources list.
+- **Guardrails**: greetings/thanks answered instantly without RAG; an LLM router refuses
+  off-topic questions ("capital of Egypt") and prompt-injection attempts, and rewrites typos and
+  Egyptian dialect into a clean search query; nothing is answered without a relevant source
+  (reranker evidence gate); numbers not found in the cited sources are flagged; uploaded files
+  are sanitised and can never be presented as official WE policy.
+- **Voice**: faster-whisper ASR with telecom hotwords (and a guard against Whisper echoing the
+  hotword prompt), Piper TTS spoken replies in Arabic and English.
+- **Documents**: PDF (text and scanned, OCR in Arabic + English), DOCX with tables, TXT, HTML,
+  images; private to the browser session that uploaded them.
+- **UI**: English or Arabic interface (full right-to-left), light/dark theme, topic quick
+  access, history grouped by day with search/rename/delete, conversation insights.
 
 ## Tested hardware
 
-- **CPU:** 16 logical cores, no NVIDIA GPU
-- **RAM:** 15 GB total
-- **OS:** Ubuntu 24.04 under WSL2 (Windows host)
-- **Disk:** ~11.2 GB of model files actually downloaded this session (LLM 2.5GB, ASR 4.7GB
-  for both Whisper sizes, embeddings 4.6GB for both encoder+reranker, TTS 0.12GB)
+| | CPU baseline (original build) | GPU (verified later) |
+|---|---|---|
+| Machine | Laptop, Ubuntu 24.04 under WSL2 | Vast.ai container, Ubuntu 24.04 |
+| CPU / RAM | 16 logical cores, 15 GB | 16 logical cores, 30 GB |
+| GPU | none | NVIDIA RTX 3080, 10 GB (driver 595, CUDA 12.8) |
+| Runtime used | native host processes (no Docker daemon) | native host processes (no Docker in the container) |
 
-If running the containerized stack: give Docker Desktop **≥ 12 GB RAM** and plan for
-**~12 GB free disk** for model files plus image layers.
+Model files: ~8 GB for the deployed set (LLM 2.4 GB, ASR turbo 1.6 GB, encoder + reranker
+4.4 GB, TTS 0.12 GB), plus 3 GB if you also download Whisper large-v3 for the ASR comparison.
 
-## ⚠️ This machine has no Docker daemon — read this first
-
-This specific laptop has Docker Desktop installed but **not running** (no WSL integration
-enabled for this distro, and no way to start it from here). The commands below
-(`make models`, `make up`, etc.) are the real, spec'd way to run this project and **are
-expected to work on a normal machine with Docker available** — they were not skippable
-fictions, they're just untested *as containers* in this specific session. Every container
-image/Dockerfile here is real and was written to the real spec.
-
-To actually verify behavior in this session, every phase was run instead as **native host
-processes** (same code, same ports, no mocks) using `scripts/native_up.sh` /
-`scripts/native_down.sh`. If you're in the same boat (no Docker daemon), use those instead
-of `make up`. If you have Docker working, use `make up` as normal — see docs/decisions.md
-for the exact diagnosis (and `docker compose config` was used to validate all three compose
-files for real, including the GPU overlay, even though nothing could be run).
-
-## Quick start (with Docker)
-
-```bash
-cp .env.example .env            # defaults to LLM_PROVIDER=local (CPU)
-make models                     # downloads all models (see "Model sources" below)
-make crawl                      # crawls te.eg (~106 pages take a few minutes)
-make ingest                     # chunks + embeds + indexes into Qdrant
-make up                         # builds and starts all 6 containers
-make smoke                      # one real call per service, asserts no <think> leakage
-```
-
-Open **http://127.0.0.1:8080**.
-
-- `make down` — stop everything
-- `make up-gpu` — GPU overlay (untested on this laptop — no NVIDIA GPU; validated with
-  `docker compose -f compose.yaml -f compose.gpu.yaml config`)
-- `make up-cloud` — routes the LLM to OpenRouter (comparison only, see Privacy below)
-- `make test` — pytest (unit tests; `tests/test_api_e2e.py` needs `-m real` against a live stack)
-- `make eval` / `make eval-compare` — see `eval/results.md`
-- `make notebook` — Jupyter at `127.0.0.1:8888`
-
-## Quick start (no Docker — the native fallback actually used this session)
+## Quick start — native, CPU (how the original build was verified)
 
 ```bash
 cp .env.example .env
-# Install Miniforge (conda) and: conda create -n we python=3.11 tesseract ffmpeg nginx -c conda-forge
-conda activate we
-pip install -r backend/requirements.txt
-python scripts/download_models.py
-python scripts/crawl_te.py
-python scripts/ingest_website.py
-bash scripts/native_up.sh        # starts qdrant, llama-server, asr, tts, backend as host processes
-nginx -c scripts/native_nginx.conf   # frontend + API proxy at 127.0.0.1:8080
+# Python 3.11 env (conda or venv) with tesseract (ara+eng), ffmpeg, nginx installed
+pip install -r backend/requirements.txt -r services/asr/requirements.txt -r services/tts/requirements.txt
+python scripts/download_models.py     # ModelScope mirror (huggingface.co was blocked there)
+python scripts/crawl_te.py            # ~106 pages, 1 request/second
+python scripts/ingest_website.py      # chunk + embed + index into Qdrant
+bash scripts/native_up.sh             # qdrant, llama-server, asr, tts, backend
+nginx -c scripts/native_nginx.conf    # frontend + API proxy at 127.0.0.1:8080
 python scripts/smoke_all.py
 ```
 
-Ports used natively (differ slightly from the container ports — see `docs/decisions.md` for
-why): frontend/nginx **8080**, backend **8020** (not 8000 — a root-owned WSL process already
-holds 8000 on this machine), llm **8081** (not 8080 — the frontend needs that port natively;
-no conflict in Docker since containers get separate network namespaces), asr **8001**, tts
-**8002**, qdrant **6333**.
+`native_up.sh` reads `STORE` (where the qdrant/llama.cpp binaries live), `LLAMA_DIR` and an
+already-activated venv; the defaults match the original laptop.
 
-## Model sources
+## Quick start — native, NVIDIA GPU
 
-**`huggingface.co` is unreachable from this machine's network** (confirmed via `curl -v`:
-every CloudFront IP times out on connect — a real, diagnosed block, not a guess). All models
-were downloaded for real from **ModelScope** (`modelscope.cn`), which mirrors the exact same
-repos. `scripts/download_models.py` lists exactly what it fetches and why; if `huggingface.co`
-works for you, the repo IDs are identical and you can adapt the script to use
-`huggingface_hub` directly.
+Same steps, with a CUDA build of llama.cpp (`cmake -B build -DGGML_CUDA=ON
+-DCMAKE_CUDA_ARCHITECTURES=86` for RTX 30xx, `120` for RTX 50xx), the CUDA torch wheel instead
+of the CPU one pinned in `backend/requirements.txt`, and the GPU switches:
+
+```bash
+STORE=/path/to/store LLAMA_DIR=/path/to/llama.cpp/build/bin \
+LLM_NGL=99 ASR_DEVICE=cuda ASR_COMPUTE_TYPE=float16 EMBED_DEVICE=cuda RERANKER_ENABLED=true \
+bash scripts/native_up.sh
+```
+
+| Switch | Default | Meaning |
+|---|---|---|
+| `LLM_NGL` | `0` | llama.cpp layers on the GPU (`99` = all) |
+| `LLM_PARALLEL` / `LLM_CTX_PER_SLOT` | `4` / `4096` | simultaneous LLM requests and tokens each (the pool is their product) |
+| `LLM_KV_TYPE` | `q8_0` | KV-cache precision (`f16` if VRAM allows) |
+| `LLM_CACHE_RAM` | `1024` | llama-server host-RAM prompt cache cap, MiB |
+| `ASR_DEVICE` / `ASR_COMPUTE_TYPE` | `cpu` / `int8` | `cuda` / `float16` on GPU |
+| `EMBED_DEVICE` | `cpu` | `cuda` runs bge-m3 + reranker on the GPU in fp16 |
+| `RERANKER_ENABLED` | `false` | reranking + the evidence gate; cheap on GPU, slower on CPU |
+
+GPU memory, measured per component on the RTX 3080 (`scripts/gpu_vram_report.py`):
+
+| Component | Loaded | Peak |
+|---|---|---|
+| LLM (Qwen3-4B Q4_K_M, 4 slots × 4096, q8_0 KV) | 3.96 GB | 3.96 GB |
+| ASR (Whisper large-v3-turbo fp16) | 2.3 GB | 2.5 GB |
+| Embedder (bge-m3 fp16) | 1.4 GB | 1.9 GB |
+| Reranker (bge-reranker-v2-m3 fp16) | +0.55 GB | +0.9 GB |
+| **Whole app** | | **9.2 GB** |
+| App + an eval run alongside | | 12.1 GB |
+
+A 10 GB card runs the app; re-ingesting the website or running the eval needs the backend
+stopped first (two embedders don't fit). A 24 GB card (RTX 3090/4090) runs everything at once.
+
+## Quick start — Docker
+
+```bash
+cp .env.example .env
+make models && make crawl && make ingest
+make up          # CPU;  make up-gpu  for the GPU overlay;  make up-cloud  for OpenRouter
+make smoke
+```
+
+Open **http://127.0.0.1:8080**. The compose files carry the same LLM settings as the native
+path. They were validated with `docker compose config` but **never run as containers** (no
+Docker daemon on the laptop, no Docker inside the GPU container). In Docker the backend image
+uses CPU-only torch, so embeddings/reranking stay on CPU even under `make up-gpu`.
+
+## Testing
+
+| Command | What it covers |
+|---|---|
+| `make test` | 101 unit tests (loaders, tables, chunking, citations, guardrails, small talk, insights, history, speech text) |
+| `pytest tests -m real` | 6 end-to-end tests against a live stack |
+| `python scripts/smoke_all.py` | one real call per service |
+| `python scripts/heavy_test.py` | 49 system checks: every upload type, voice round trip, adversarial guardrail set, session isolation, input edge cases, 8 concurrent users, insights |
+| `python eval/run_eval.py` | retrieval ablation + full pipeline on 25 questions (`eval/results.md` CPU, `eval/results_gpu.md` GPU) |
+| `python eval/asr_eval.py` | ASR WER/CER: turbo vs large-v3, beam 1/5, hotwords on/off |
+| `python scripts/gpu_leak_test.py` | GPU memory / RSS / file-descriptor soak test |
+| `python scripts/gpu_vram_report.py` | per-component GPU memory |
+
+## Measured results
+
+| | CPU laptop (`eval/results.md`) | RTX 3080 (`eval/results_gpu.md`) |
+|---|---|---|
+| Answerable questions answered, with valid citations | 19/20 | 20/20 |
+| Unanswerable questions correctly refused | 2/5 | 5/5 |
+| Retrieval Recall@4 (hybrid + rerank) | 0.95 | 0.95 |
+| `/chat` latency p50 / p95 | 66.5 s / 100.7 s | 1.2 s / 1.9 s |
+| 8 simultaneous users (p50 / p95) | — | 5.8 s / 7.7 s, 32/32 answered |
+
+The GPU run includes the guardrails added after the CPU run (router, reranker gate); the CPU
+numbers are the original baseline and were not re-measured. GPU soak test: memory flat after
+warm-up, no leaks. ASR on synthetic TTS clips (`eval/results_asr_synthetic.md`, plumbing check
+only): 13.1% WER with the deployed setting, English and MSA transcribed exactly; real recorded
+clips are still to be collected (`eval/RECORDING_CHECKLIST.md`).
 
 ## LLM provider modes
 
-Set in `.env` via `LLM_PROVIDER`:
-
 | Mode | How | Privacy |
 |---|---|---|
-| `local` (default) | `make up` / `bash scripts/native_up.sh` — Qwen3-4B Q4_K_M GGUF on CPU via llama.cpp | Nothing leaves the machine. |
-| `local` + GPU | `make up-gpu` — same model, `-ngl 99` (**untested, no GPU on this laptop**) | Nothing leaves the machine. |
-| `openrouter` | `make up-cloud`, needs a real `OPENROUTER_API_KEY` in `.env` | **Prompts and retrieved document text are sent to OpenRouter.** The UI shows a visible "Cloud LLM (comparison) — data leaves this machine" badge in this mode. Comparison/benchmarking only, per the brief — never the default, never used in the offline demo. |
+| `local` (default) | Qwen3-4B Q4_K_M via llama.cpp, CPU or GPU | Nothing leaves the machine. |
+| `openrouter` | `make up-cloud` with a real `OPENROUTER_API_KEY` | **Prompts and retrieved document text are sent to OpenRouter.** The UI shows a "Cloud LLM (comparison) — data leaves this machine" badge. Comparison only, never the default. |
 
-This session's `.env` has `OPENROUTER_API_KEY` blank: the key provided didn't authenticate
-against OpenRouter's real API (confirmed with a live request — `401 Missing Authentication
-header`, and the value didn't match OpenRouter's usual `sk-or-v1-` key format). The app
-handles this exactly as specced: the provider reports "unavailable" and everything else
-keeps working. Add a real key and re-run `make smoke` / `make eval-compare` to exercise it.
+The OpenRouter key provided during the build did not authenticate (real `401`, not the
+`sk-or-v1-` format), so the cloud path reports "unavailable" and everything else keeps working.
 
 ## Offline operation
 
-`HF_HUB_OFFLINE=1` and `TRANSFORMERS_OFFLINE=1` are set everywhere; every model loads from
-a local path at runtime (downloads only happen in `make models`, a separate `setup` step).
-Every inference call (LLM, ASR, TTS, Qdrant, embeddings) goes to `127.0.0.1` — confirmed
-throughout this session via the backend/nginx access logs, which show no external DNS or
-network calls during normal chat/ASR/TTS/retrieval operation.
+`HF_HUB_OFFLINE=1` and `TRANSFORMERS_OFFLINE=1` are set everywhere and every model loads from a
+local path; every inference call goes to `127.0.0.1` (confirmed in the backend/nginx logs).
+Physically disconnecting the network was not possible in the sandboxed build environments;
+turning Wi-Fi off and re-running the demo on the real machine is the stronger proof.
 
-**Honesty note:** physically disconnecting Wi-Fi to prove this wasn't done in this session —
-toggling network state isn't practical in this sandboxed headless dev container. What's
-verified instead is architectural (offline env vars set, all traffic observed going to
-loopback addresses only). If you have access to the physical machine, turning off Wi-Fi and
-re-running the demo end-to-end is the stronger proof and is expected to work unchanged.
+## Model sources and licenses
 
-## Model licenses
-
-All verified for real this session (API queries to ModelScope/GitHub, or the model's own
-`README.md`/config on disk) — not from memory.
+Models were downloaded from ModelScope on the laptop (huggingface.co was blocked there) and
+from huggingface.co on the GPU machine; the repo ids are identical.
 
 | Model | Source | License |
 |---|---|---|
 | Qwen3-4B-GGUF (LLM) | `Qwen/Qwen3-4B-GGUF` | Apache-2.0 |
-| faster-whisper large-v3 (ASR) | `Systran/faster-whisper-large-v3` | MIT |
-| faster-whisper large-v3-turbo (ASR) | `mobiuslabsgmbh/faster-whisper-large-v3-turbo` | MIT |
+| faster-whisper large-v3-turbo (ASR, deployed) | `mobiuslabsgmbh/faster-whisper-large-v3-turbo` | MIT |
+| faster-whisper large-v3 (ASR, comparison) | `Systran/faster-whisper-large-v3` | MIT |
 | bge-m3 (embeddings) | `BAAI/bge-m3` | MIT |
 | bge-reranker-v2-m3 (reranker) | `BAAI/bge-reranker-v2-m3` | Apache-2.0 |
 | Piper voices (TTS) | `rhasspy/piper-voices` | MIT |
 | llama.cpp (LLM server) | `ggml-org/llama.cpp` | MIT |
 | Qdrant | `qdrant/qdrant` | Apache-2.0 |
 
-## Measured latency (this laptop, CPU-only)
-
-Full numbers, methodology, and the retrieval ablation are in `eval/results.md`. Headline
-Phase-1 sample (4B model, ~2000-token RAG context, 8 threads): LLM prompt eval ~34-44
-tok/s, generation ~5.6 tok/s, **end-to-end `/chat` answers take roughly 80-140 seconds** —
-the dominant cost on this hardware. This is a genuine CPU constraint (documented honestly,
-not tuned away) — see "Limitations" and the production roadmap in `slides/`.
-
 ## Known limitations
 
-- **Abstention precision gap, found by the real eval**: 2 of 5 unanswerable test questions
-  were incorrectly answered instead of triggering `insufficient_evidence` — both mentioned
-  "WE" or Egypt/Cairo context, which is enough token overlap to push retrieval's fused score
-  above the current threshold even though the question isn't actually covered. See
-  `eval/results.md` for the full breakdown; the threshold is a real tuning target, not
-  swept under the rug.
-- **No Docker daemon on this machine** — see above. Container paths are real and spec'd but
-  untested here; native fallback used instead for all verification.
-- **LLM latency is high** (60-140s/answer) — a 4B model with a ~2k-token RAG context on CPU
-  is slow. GPU serving (`compose.gpu.yaml`) would fix this but is untested here (no GPU).
-- **OpenRouter comparison unavailable this session** — no working API key (see above).
-- **No real recorded audio clips yet** — `eval/audio_manifest.jsonl.template` and
-  `eval/RECORDING_CHECKLIST.md` are ready for Ahmed to record ~10 real clips; only synthetic
-  (Piper-TTS-voiced, clearly labeled) clips were used this session, for plumbing tests only.
-- **Arabic OCR accuracy is imperfect** on synthetic (non-photographic) test renders —
-  word-level content and all key numbers were recovered correctly in testing, but letter-
-  level reordering occurred. Real scanned documents typically OCR better.
-- **Headless-browser E2E testing of long-LLM-wait UI flows is unreliable** in this specific
-  WSL2 + headless-Chromium sandbox (thoroughly diagnosed in `docs/progress.md` Phase 4) —
-  the underlying app logic is proven correct via direct protocol testing; a human using a
-  normal (non-automated) browser is not expected to hit this.
-- **Piper's Arabic pronunciation quality** is the best available open TTS voice for Arabic
-  but is noticeably more robotic than the English voice — documented honestly per spec,
-  Chatterbox (GPU-only) is on the production roadmap.
-- One LLM generation run produced a single stray Cyrillic word mid-Arabic-sentence — a minor
-  quantization artifact of the 4B model, not a pipeline bug (see `docs/progress.md` Phase 1).
+- **Containers never run** — Docker paths are written and config-validated only (see above).
+- **No real recorded audio yet** — ASR accuracy is measured on synthetic TTS speech only; the
+  Arabic TTS voice is Jordanian, so Egyptian-dialect accuracy needs real clips.
+- **CPU latency** — ~1-2 minutes per answer on the laptop. The router added one short LLM call
+  per question after the CPU baseline; its CPU cost has not been re-measured.
+- **10 GB GPUs are tight** — see the memory table; maintenance jobs need the backend stopped.
+- **Conflicts with uploads are only flagged when both sources are retrieved** — if no official
+  te.eg passage is in the top 4, the answer uses the document, attributed to the document.
+- **Piper's Arabic voice** is more robotic than the English one; a better Arabic/Egyptian voice
+  is on the roadmap.
+- **Small-model quirks** — the 4B model occasionally adds its own unit conversions (caught by the
+  numeric warning) and needed explicit language reminders; a larger model (e.g. Qwen3-8B on a
+  24 GB GPU, ~6 GB estimated) is the natural next step.
 
 ## Repository layout
 
-See `docs/SPEC.md` section 1, or just browse — `backend/app/` is organized by concern
-(`ingestion/`, `retrieval/`, `generation/`, `clients/`), `services/` holds the ASR/TTS
-containers, `scripts/` holds the one-off/setup scripts (including the native-fallback ones
-added this session), `eval/` and `tests/` hold the evaluation and test suites, `docs/` holds
-the build log and decisions.
+`backend/app/` by concern (`ingestion/`, `retrieval/`, `generation/` incl. `guard.py` and
+`smalltalk.py`, `clients/`), `services/` the ASR/TTS services, `frontend/public/` the UI
+(`app.js`, `i18n.js`, `icons.js`), `scripts/` setup and test tools, `eval/` evaluation,
+`tests/` unit + live tests, `docs/` report, architecture, decisions and build log.
 
-## Demo script
+## Demo
 
-See `docs/demo_script.md` for the exact walkthrough (EN question → Egyptian voice question →
-follow-up → Arabic PDF upload → unanswerable question → insights → Wi-Fi off).
+See `docs/demo_script.md`.

@@ -1,7 +1,8 @@
 # Progress Log
 
-Running on: WSL2 Ubuntu 24.04 (Windows host), 16 cores, 15 GB RAM, no NVIDIA GPU.
-See `docs/decisions.md` for environment-fallback decisions (no Docker daemon available).
+Phases 0-6 ran on: WSL2 Ubuntu 24.04 (Windows host), 16 cores, 15 GB RAM, no NVIDIA GPU.
+Phase 7 ran on: Vast.ai container, Ubuntu 24.04, 16 cores, 30 GB RAM, NVIDIA RTX 3080 10 GB.
+See `docs/decisions.md` for environment-fallback decisions (no Docker daemon available on either).
 
 ---
 
@@ -412,3 +413,64 @@ LLM-dependent step is unreliable in this specific headless-automation environmen
   rather than claimed working.
 - Physical Wi-Fi-off offline proof wasn't performed (sandboxed dev environment) —
   architecturally verified instead (see README's "Offline operation" section).
+
+---
+
+## Phase 7 — GPU bring-up, guardrails, UI redesign, hardening
+
+**Status: DONE.** Everything below was run on the RTX 3080 box as native processes
+(`scripts/native_up.sh` with the GPU switches); numbers are from real runs.
+
+**GPU bring-up**
+- llama.cpp built from source with CUDA (sm_86); CUDA torch 2.14.1 (cu130) for the backend;
+  faster-whisper fp16; bge-m3 and the reranker in fp16 on CUDA (`EMBED_DEVICE`).
+- `scripts/gpu_leak_test.py` soak: GPU memory, RSS, fds, temp files flat after warm-up. Found
+  llama-server's host prompt cache growing to its 8 GiB default (not a leak) — capped.
+- `scripts/gpu_vram_report.py`: LLM 3.96 GB, ASR 2.3-2.5 GB, embedder 1.4-1.9 GB, reranker
+  +0.55-0.9 GB; whole app 9.2 GB at peak, 12.1 GB with an eval alongside.
+
+**Bugs found in live GUI testing, fixed** (details in `docs/decisions.md`)
+- Answers never rendered: SSE events are `\r\n\r\n`-delimited, the client split on `\n\n`.
+- Greetings went through RAG and cited unrelated pages; answers lagged one turn behind
+  (history passed to the 4B model as chat turns); off-topic questions answered from general
+  knowledge; the RRF threshold rejected almost nothing; English questions answered in Arabic
+  (8/20); an uploaded document could inject "all packages are free"; insights labelled MSA as
+  Egyptian; numeric warning on the answer's own list numbers.
+- Fixes: small-talk shortcut, regex injection pre-filter, LLM router (classification +
+  standalone typo/dialect-free query), reranker evidence gate (`min_rerank_score` 0.02), answer
+  prompt without history, language reminder + one regeneration, prompt-leak check, upload
+  sanitising and official-vs-upload source tags, grounded dialect.
+- te.eg price tables with merged header cells parsed into per-column headers (8 of 84 tables).
+
+**UI**: English/Arabic interface (RTL), light/dark theme, topic quick access, history grouped
+by day with search/rename/delete (new PATCH/DELETE endpoints), grouped sources, composer that
+keeps focus, microphone states and permission guidance, Send-while-recording.
+
+**Hardening (heavy test)** — new `scripts/heavy_test.py` (49 checks). First run: 38/41.
+- 8 concurrent users: 7/32 failed with "Context size has been exceeded" — llama-server's 4 slots
+  shared one 4096-token pool. Now 4 × 4096 with a q8_0 KV cache: 32/32, p50 5.8 s, p95 7.7 s.
+- The Arabic image-PDF fixture was drawn reversed (reshaper + bidi on top of Pillow's own raqm
+  shaping); OCR read it back reversed and the numbers-only test still passed. Fixture fixed,
+  test now checks the Arabic words.
+- Empty / over-long messages now rejected with 422.
+- Long tables became one oversized chunk (up to ~1500 tokens): oversized units are now split on
+  row/sentence/word boundaries — 360 chunks, max 509 tokens.
+- Uploaded originals now saved as `data/uploads/<uuid>.<type>` (SPEC section 5).
+- TTS text cleanup read "10GB" as "tenGB" (noted in Phase 6): a space is now inserted between a
+  number and a glued unit before verbalising.
+- Whisper sometimes returned its own hotword prompt ("إنترنت المنزل, فاتورة, باقة, ...") on
+  clipped audio — detected and re-transcribed without hotwords (8/8 correct afterwards).
+
+**ASR evaluation tooling** — `eval/asr_eval.py` (turbo vs large-v3, beam 1/5, hotwords on/off;
+WER/CER, RTF). Real clips still to be recorded; synthetic TTS run
+(`eval/results_asr_synthetic.md`): deployed setting 13.1% WER / 4.6% CER and fastest; EN and
+MSA exact; errors on Egyptian-dialect text read by the Jordanian TTS voice.
+
+**Final verification (GPU)**: 101 unit + 6 live tests; smoke all green; heavy test 49/49; eval
+20/20 answered with citations, 5/5 abstentions, p50 1.2 s / p95 1.9 s (`eval/results_gpu.md`);
+soak test flat at 9.0 GB; headless-Chrome UI tests (English/light, Arabic/dark, topics, history,
+voice) without page errors.
+
+**Not done here**: Docker containers still never run (no daemon); real recorded audio; CPU cost
+of the router not re-measured; OpenRouter (no valid key).
+

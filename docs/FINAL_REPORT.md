@@ -1,101 +1,97 @@
 # Final Report — WE Assistant PoC
 
-For Ahmed. This is the top-level summary; `docs/progress.md` has the full phase-by-phase
-log with every command run and its real output, `docs/decisions.md` has every environment
-decision with a one-line reason, and `eval/results.md` has the full evaluation write-up.
+Top-level summary. `docs/progress.md` has the phase-by-phase log with real commands and output,
+`docs/decisions.md` a one-line reason for every non-obvious decision, `docs/architecture.md`
+the design, and `eval/results.md` (CPU) / `eval/results_gpu.md` (GPU) the evaluation write-ups.
 
 ## How to run it
 
-**If you have Docker working** (this build machine didn't — see "What's untested" below):
-```bash
-cp .env.example .env
-make models   # downloads ~11GB of models (see scripts/download_models.py — uses
-              # ModelScope, not huggingface.co, which is unreachable from this network;
-              # if huggingface.co works for you, swap it back)
-make crawl
-make ingest
-make up
-make smoke
-```
-Open **http://127.0.0.1:8080**.
+See `README.md`: native CPU, native GPU (with the switch table and a GPU memory table) and
+Docker. The two environments actually used for verification were a CPU-only laptop (the
+original build) and an RTX 3080 10 GB GPU container; both ran the services as native host
+processes because neither had a usable Docker daemon.
 
-**If you don't have Docker** (same situation as this build), use the native fallback —
-full instructions in `README.md`'s "Quick start (no Docker)" section. Everything below was
-verified this way.
+## What works (verified, not claimed)
 
-## What works (verified for real, not claimed)
+- **RAG pipeline** — EN, MSA and Egyptian-dialect questions get cited answers from 106 real
+  te.eg pages (360 chunks). GPU eval: 20/20 answerable questions answered with valid
+  citations, 5/5 unanswerable ones refused.
+- **Guardrails** — small talk answered without RAG; off-topic questions and prompt-injection
+  attempts refused (regex pre-filter + LLM router); typos and dialect rewritten into a clean
+  query; reranker evidence gate; numbers not in the cited sources flagged; system-prompt leaks
+  withheld; uploaded documents sanitised and labelled as non-official, with te.eg preferred on
+  conflicts. Adversarial set in the heavy test: 10/10 off-topic, 7/7 injection, 6/6 small talk,
+  10/10 tricky-but-legitimate questions not blocked.
+- **Documents** — PDF (text layer and scanned/OCR, Arabic and English), DOCX with tables, TXT,
+  HTML and images ingest and are answerable; originals saved under `data/uploads/`; long tables
+  split on row boundaries; te.eg price tables with merged header cells parsed correctly.
+- **Session isolation** — another session cannot read, rename, delete, chat in, fetch audio
+  from, or retrieve from your conversations and documents (8 live checks).
+- **Speech** — ASR (EN and AR, silence rejected, hotword-echo guard) and TTS replies;
+  synthetic-speech WER 13.1% with the deployed setting (real clips pending).
+- **Frontend** — streamed answers with lists and source badges, grouped sources, English/Arabic
+  interface (RTL), light/dark theme, topic quick access, history (grouped, search, rename,
+  delete), insights, voice with clear microphone-permission guidance. Verified in headless
+  Chrome.
+- **Robustness** — 8 simultaneous users: 32/32 answered (p50 5.8 s); GPU soak test flat (no
+  memory, RSS or file-descriptor growth); invalid input rejected with 422.
+- **Tests** — 101 unit + 6 live end-to-end tests, and 49/49 heavy system checks.
 
-- **Full RAG pipeline**: EN, MSA, and Egyptian-dialect questions all get correctly cited
-  answers from real te.eg content (106 crawled pages, 322 chunks). Off-topic questions
-  mostly abstain correctly (`insufficient_evidence`) — see "Open issues" for the 2/5 gap.
-- **Document upload**: PDF (text-layer and scanned/OCR), DOCX with tables, TXT, HTML, and
-  images all ingest and become queryable, with correct page/section citations.
-- **Session isolation**: verified live — uploads and conversations from one browser session
-  are completely invisible to another, even when a request explicitly references them.
-- **Speech**: real ASR transcription (clean/noisy English, Egyptian Arabic all tested, silence
-  correctly rejected) and real TTS playback of answers.
-- **Frontend**: the full UI (chat, citations/sources panel, document upload+list, language
-  switch, insights, voice recording) renders and works — proven live in a real headless
-  browser for everything except the LLM-dependent rendering step (see below), and proven via
-  direct protocol testing for that step.
-- **Grounding safety net**: the citation validator caught a real LLM hallucination during
-  testing (a fabricated phone number not in any source) and correctly flagged it.
-- **45/45 tests pass** (39 unit + 6 live end-to-end, including a full real `/chat` SSE round trip).
-
-## What's tested vs. untested
+## Tested vs. untested
 
 | Area | Status |
 |---|---|
-| Local CPU LLM path (default) | **Tested extensively**, real measured latency |
-| GPU overlay (`compose.gpu.yaml`) | **Untested** — no NVIDIA GPU on this laptop. Validated with `docker compose config` only. |
-| OpenRouter cloud path | **Untested this session** — the key you provided didn't authenticate (real `401`, wrong key format). Add a real key from https://openrouter.ai/settings/keys to `.env` and re-run `make smoke` / `make eval-compare`. |
-| Containerized deployment (`make up`) | **Untested** — no Docker daemon on this machine (Docker Desktop installed but not running/WSL-integrated for this distro, no way to start it headlessly). Every Dockerfile/compose file is real and spec-complete; native host-process equivalents were used for all verification instead. |
-| ASR WER/CER ablation | **Untested** — needs your real recorded clips (see "Next steps"). |
-| Physical offline (Wi-Fi off) proof | **Not physically tested** — architecturally verified instead (offline env vars set, all traffic observed on 127.0.0.1 only). Toggling Wi-Fi isn't practical in this sandboxed session; expected to work unchanged on the real machine. |
-| Headless-browser E2E of LLM-dependent UI | **Diagnosed limitation, not a product bug** — a thoroughly investigated headless-Chromium-in-WSL2 issue where the browser doesn't recognize long (60s+) SSE stream completion even though the network layer completes correctly (confirmed via nginx access logs). A human using a normal browser is not expected to hit this. |
+| Local LLM on CPU | Tested on the laptop (original baseline) |
+| Local LLM on GPU (native) | **Tested** on RTX 3080: eval, heavy test, soak, VRAM report |
+| Docker containers (`make up`, `make up-gpu`) | **Not run** — no Docker daemon on either machine; config-validated only. In Docker, embeddings stay on CPU (CPU torch image). |
+| OpenRouter cloud path | Not tested — the provided key was rejected (`401`) |
+| ASR accuracy on real speech | **Pending** — tooling ready (`eval/asr_eval.py`); only synthetic TTS clips measured |
+| Guardrail latency on CPU | Not re-measured (router adds one short LLM call; ~0.2 s on GPU) |
+| Physical offline (Wi-Fi off) | Architecturally verified (all calls to 127.0.0.1), not physically toggled |
 
-## Measured results (real, from `eval/results.md`)
+## Measured results
 
-- **Retrieval**: Recall@4 = 0.95 across dense/hybrid/hybrid+rerank on 20 real questions.
-  Finding: RRF fusion alone has lower MRR (0.64-0.66) than dense-only or hybrid+rerank
-  (both 0.825) — a concrete argument for enabling the reranker despite its CPU cost.
-- **Full pipeline**: 19/20 answerable questions correctly answered+cited; 2/5 unanswerable
-  questions correctly abstained. Latency: p50 total 66.5s, p95 total 100.7s per answer —
-  this is the dominant real cost of CPU-only 4B-model serving with a full RAG context.
-- **A real bug was found by the eval itself**: one question's retrieved context exceeded the
-  LLM's context window (a spec'd "~2k token" cap that was never actually enforced in code).
-  Fixed and verified during this session — see `eval/results.md` / `docs/decisions.md` for
-  the full diagnosis.
-- **A real precision gap was found and reported, not hidden**: 2 of 5 unanswerable questions
-  were incorrectly answered because they mentioned "WE" or Egypt/Cairo context, which is
-  enough lexical overlap to push the retrieval score above threshold. Worth tuning the
-  threshold or adding a stricter relevance check — see `eval/results.md`.
+| | CPU laptop | RTX 3080 |
+|---|---|---|
+| Answerable answered with citations | 19/20 | 20/20 |
+| Unanswerable correctly refused | 2/5 | 5/5 |
+| Retrieval Recall@4 / MRR (hybrid + rerank) | 0.95 / 0.825 | 0.95 / 0.825 |
+| `/chat` p50 / p95 | 66.5 s / 100.7 s | 1.2 s / 1.9 s |
 
-## Open issues / next steps for Ahmed
+The GPU column includes the guardrails added after the CPU run; the CPU column is the original
+baseline. GPU memory: 9.2 GB for the whole app at peak (component table in `README.md`).
 
-1. **Record real audio clips.** `eval/RECORDING_CHECKLIST.md` has the plan;
-   `eval/audio_manifest.jsonl.template` has the 10-slot structure. Once you drop real clips
-   into `eval/audio/` and fill in the manifest (rename off `.template`), run `make eval`
-   again to get real WER/CER numbers.
-2. **Get a real OpenRouter key** from https://openrouter.ai/settings/keys (the one tried
-   this session wasn't a valid OpenRouter key — didn't match the `sk-or-v1-` format and was
-   rejected with a real `401`). Add it to `.env`, then `make smoke` and `make eval-compare`
-   will exercise the cloud comparison path for real.
-3. **If you have a machine with Docker available**, run the actual `make up` / `make up-gpu`
-   containerized path at least once to confirm the Dockerfiles build cleanly end-to-end —
-   they were written to spec and validated with `docker compose config`, but never actually
-   built/run as containers in this session.
-4. **Tune the retrieval threshold** (`config/settings.yaml`'s `min_score_threshold`, currently
-   0.015) against the abstention false-positives found in `eval/results.md` — raising it
-   should fix the 2 incorrect "answered" cases without re-breaking real questions, but that
-   needs verifying against the full question set.
-5. **If a GPU becomes available**, `compose.gpu.yaml` is ready to try (`make up-gpu`) — this
-   would directly address the biggest limitation (60-140s/answer latency on CPU).
+## Problems found by testing, and fixed
+
+Each is logged with its diagnosis in `docs/decisions.md`:
+
+- Context overflow on long retrieved contexts (CPU phase) — token budget now enforced.
+- Answers never rendered in the browser — the SSE parser ignored CRLF-delimited events.
+- Answers lagging one turn behind — chat history was given to the 4B model as chat turns.
+- Off-topic questions answered from general knowledge; the RRF score threshold rejected
+  almost nothing (rank-1 hits always score ~1/61) — router + reranker evidence gate.
+- English questions answered in Arabic (8/20) — language rule repeated at the end of the prompt.
+- Simultaneous users failing with "Context size has been exceeded" — llama-server's slots
+  shared one 4096-token pool; now sized per slot.
+- Price tables garbled ("col3: 775") by merged header cells; oversized table chunks.
+- Whisper occasionally "transcribing" its own hotword prompt — detected and re-transcribed.
+- Numeric warning fired on the answer's own list numbering; insights called MSA "Egyptian".
+- The Arabic OCR test fixture was drawn reversed (bidi applied twice) — fixed and the test now
+  checks the Arabic words, not just the numbers.
+
+## Next steps
+
+1. **Record ~10 real clips** (`eval/RECORDING_CHECKLIST.md`) and run `python eval/asr_eval.py`.
+2. **Run the containers once** on a machine with Docker (`make up`, `make up-gpu`).
+3. **Move to a 24 GB GPU** (RTX 3090): runs the app plus eval/maintenance concurrently; try
+   Qwen3-8B against the same eval.
+4. **Measure the guardrails on CPU** and tune if the router call is too slow there.
+5. **Add a real OpenRouter key** and run `make eval-compare`.
+6. Production roadmap: auto-restarting services, a CUDA backend image, a better Arabic voice,
+   monitoring, SSO.
 
 ## Repository state
 
-All work is committed to git, one commit per phase (`git log --oneline` to see them):
-phase 0 (skeleton+models+smoke), phase 1 (RAG pipeline), phase 2 (document ingestion),
-phase 3 (ASR/TTS), phase 4 (frontend), phase 5 (eval+tests+bugfix), phase 6 (this report +
-README/notebook/slides/architecture docs). `docs/decisions.md` has a one-line reason for
-every environment-driven choice made along the way, in case anything looks surprising.
+Commits per phase (0-6, the CPU build) followed by the GPU bring-up, SSE fix, table parser,
+citation fix, insights, guardrails, history API, frontend redesign and decision-log commits,
+then the hardening work described above. `git log --oneline` lists them.
