@@ -1,0 +1,9 @@
+{"id": "en_clean_01", "filename": "synthetic/en_clean_01.wav", "lang": "en", "dialect": "", "condition": "clean", "transcript": "What is the price of the home internet package?", "notes": "synthetic Piper TTS"}
+{"id": "en_clean_02", "filename": "synthetic/en_clean_02.wav", "lang": "en", "dialect": "", "condition": "clean", "transcript": "How can I recharge my mobile balance?", "notes": "synthetic Piper TTS"}
+{"id": "en_noisy_01", "filename": "synthetic/en_noisy_01.wav", "lang": "en", "dialect": "", "condition": "noisy", "transcript": "Which number should I call before travelling abroad?", "notes": "synthetic Piper TTS"}
+{"id": "ar_msa_clean_01", "filename": "synthetic/ar_msa_clean_01.wav", "lang": "ar", "dialect": "msa", "condition": "clean", "transcript": "ما هي أسعار باقات الإنترنت المنزلي؟", "notes": "synthetic Piper TTS"}
+{"id": "ar_msa_noisy_01", "filename": "synthetic/ar_msa_noisy_01.wav", "lang": "ar", "dialect": "msa", "condition": "noisy", "transcript": "كيف يمكنني شحن رصيد الهاتف المحمول؟", "notes": "synthetic Piper TTS"}
+{"id": "ar_egy_clean_01", "filename": "synthetic/ar_egy_clean_01.wav", "lang": "ar", "dialect": "egyptian", "condition": "clean", "transcript": "عايز أعرف سعر باقة الإنترنت المنزلي", "notes": "synthetic Piper TTS"}
+{"id": "ar_egy_clean_02", "filename": "synthetic/ar_egy_clean_02.wav", "lang": "ar", "dialect": "egyptian", "condition": "clean", "transcript": "إزاي أنقل ملكية الخط لاسم تاني؟", "notes": "synthetic Piper TTS"}
+{"id": "ar_egy_noisy_01", "filename": "synthetic/ar_egy_noisy_01.wav", "lang": "ar", "dialect": "egyptian", "condition": "noisy", "transcript": "هو رقم خدمة العملاء كام؟", "notes": "synthetic Piper TTS"}
+{"id": "ar_codeswitch_01", "filename": "synthetic/ar_codeswitch_01.wav", "lang": "ar", "dialect": "egyptian", "condition": "code-switched", "transcript": "عايز أعرف الواي فاي بتاع باقة WE Air", "notes": "synthetic Piper TTS"}

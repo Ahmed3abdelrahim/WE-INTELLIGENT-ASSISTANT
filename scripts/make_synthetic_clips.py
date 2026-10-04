@@ -4,7 +4,13 @@ never a substitute for the real recorded clips in eval/audio_manifest.jsonl. Req
 TTS service reachable at TTS_URL (default http://127.0.0.1:8002).
 
 Produces eval/audio/synthetic_{en_clean,egy_clean,en_noisy,silence}.wav.
+
+With --manifest it instead builds a synthetic ASR eval set mirroring the 10 real recording
+slots: eval/audio/synthetic/*.wav + eval/audio_manifest.synthetic.jsonl (ground truth = the
+TTS input text), for `eval/asr_eval.py --manifest eval/audio_manifest.synthetic.jsonl`.
 """
+import json
+import sys
 import os
 import random
 import struct
@@ -47,7 +53,45 @@ def make_silence(out_path: str, seconds: float = 2.0, sr: int = 16000):
     print("wrote", out_path)
 
 
+SYNTHETIC_SET = [
+    # (id, lang, dialect, condition, text)
+    ("en_clean_01", "en", "", "clean", "What is the price of the home internet package?"),
+    ("en_clean_02", "en", "", "clean", "How can I recharge my mobile balance?"),
+    ("en_noisy_01", "en", "", "noisy", "Which number should I call before travelling abroad?"),
+    ("ar_msa_clean_01", "ar", "msa", "clean", "ما هي أسعار باقات الإنترنت المنزلي؟"),
+    ("ar_msa_noisy_01", "ar", "msa", "noisy", "كيف يمكنني شحن رصيد الهاتف المحمول؟"),
+    ("ar_egy_clean_01", "ar", "egyptian", "clean", "عايز أعرف سعر باقة الإنترنت المنزلي"),
+    ("ar_egy_clean_02", "ar", "egyptian", "clean", "إزاي أنقل ملكية الخط لاسم تاني؟"),
+    ("ar_egy_noisy_01", "ar", "egyptian", "noisy", "هو رقم خدمة العملاء كام؟"),
+    ("ar_codeswitch_01", "ar", "egyptian", "code-switched", "عايز أعرف الواي فاي بتاع باقة WE Air"),
+]
+
+
+def make_manifest():
+    out_dir = os.path.join(OUT_DIR, "synthetic")
+    os.makedirs(out_dir, exist_ok=True)
+    rows = []
+    for cid, lang, dialect, condition, text in SYNTHETIC_SET:
+        path = os.path.join(out_dir, f"{cid}.wav")
+        if condition == "noisy":
+            clean = os.path.join(out_dir, f"_{cid}_clean.wav")
+            synthesize(text, lang, clean)
+            make_noisy(clean, path)
+            os.remove(clean)
+        else:
+            synthesize(text, lang, path)
+        rows.append({"id": cid, "filename": f"synthetic/{cid}.wav", "lang": lang, "dialect": dialect,
+                     "condition": condition, "transcript": text, "notes": "synthetic Piper TTS"})
+    manifest = os.path.join(os.path.dirname(OUT_DIR), "audio_manifest.synthetic.jsonl")
+    with open(manifest, "w", encoding="utf-8") as f:
+        f.writelines(json.dumps(r, ensure_ascii=False) + "\n" for r in rows)
+    print("wrote", manifest)
+
+
 def main():
+    if "--manifest" in sys.argv:
+        make_manifest()
+        return
     os.makedirs(OUT_DIR, exist_ok=True)
     en_clean = os.path.join(OUT_DIR, "synthetic_en_clean.wav")
     synthesize("What is the price of the home internet package?", "en", en_clean)

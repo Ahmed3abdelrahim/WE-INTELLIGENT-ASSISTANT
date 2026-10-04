@@ -253,13 +253,13 @@ def write_results_md(questions, retrieval_summary, pipeline_summary, compare_sum
                       "(docs/progress.md) — `run_eval.py`'s pipeline eval here is text-only.\n")
 
     lines.append("\n## ASR WER/CER (turbo vs large-v3, beam 1 vs 5, with/without hotwords)\n")
+    # Measured by eval/asr_eval.py (loads Whisper models in-process, so it runs separately).
     if has_real_audio:
-        lines.append("real audio manifest found — see the dedicated section below.\n")
+        lines.append("Real recorded clips: see `eval/results_asr.md` (`python eval/asr_eval.py`).\n")
     else:
-        lines.append("**SKIPPED**: `eval/audio_manifest.jsonl` (real recorded clips) does not exist yet. "
-                      "Per project instructions, synthetic TTS clips are plumbing-test-only and are never "
-                      "substituted here. Ahmed will record real clips per `eval/RECORDING_CHECKLIST.md`; "
-                      "once `eval/audio_manifest.jsonl` exists, re-run `make eval` to fill this in.\n")
+        lines.append("Real recorded clips not provided yet (`eval/audio_manifest.jsonl`, see "
+                      "`eval/RECORDING_CHECKLIST.md`). A synthetic-TTS plumbing run is in "
+                      "`eval/results_asr_synthetic.md` and is never substituted for real numbers.\n")
 
     lines.append("\n## Local vs OpenRouter comparison (`make eval-compare`)\n")
     if compare_summary:

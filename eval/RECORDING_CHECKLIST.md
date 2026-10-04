@@ -25,4 +25,12 @@ lists the 10 slots this was planned around (lang/dialect/condition mix) — rena
   never substituted for the real eval numbers in `eval/results.md`.
 
 ## When done
-Rename the template to `eval/audio_manifest.jsonl` (drop `.template`) and run `make eval`.
+Rename the template to `eval/audio_manifest.jsonl` (drop `.template`) and run:
+
+```bash
+python eval/asr_eval.py          # writes eval/results_asr.md
+```
+
+It compares large-v3-turbo vs large-v3, beam 1 vs 5, hotwords on/off (WER, CER, speed).
+On a 10 GB GPU stop the backend and ASR service first (it loads the models itself).
+A synthetic-TTS run of the same tool is in `eval/results_asr_synthetic.md` for reference.

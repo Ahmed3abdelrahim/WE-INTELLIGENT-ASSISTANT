@@ -15,3 +15,5 @@ node_modules/
 eval/audio/*.wav
 !eval/audio/.gitkeep
 .claude/
+eval/audio/synthetic/
+.qdrant-initialized
