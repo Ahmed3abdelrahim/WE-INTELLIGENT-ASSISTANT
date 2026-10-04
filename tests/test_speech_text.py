@@ -63,3 +63,7 @@ def test_echo_with_filler_fragments_detected():
     # second variant seen live: prompt words mixed with fragments
     assert echoes_hotwords("فاتورة. ما إنترنت المنزل, فلما إنترنت المنزل, فلما إنترنت", HOTWORDS)
 
+
+def test_number_glued_to_unit_is_spoken_separately():
+    out = clean_for_tts("Basic offers 10GB for 99 EGP.", "en")
+    assert "tenGB" not in out and "ten GB" in out

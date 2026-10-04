@@ -11,6 +11,7 @@ CITATION_RE = re.compile(r"\[S\d+\]")
 URL_RE = re.compile(r"https?://\S+")
 MARKDOWN_RE = re.compile(r"[*_`#]+")
 NUMBER_RE = re.compile(r"\d+(?:\.\d+)?")
+NUMBER_UNIT_RE = re.compile(r"(\d)([A-Za-z\u0600-\u06FF])")
 
 _lexicon = None
 
@@ -34,6 +35,8 @@ def _verbalize_numbers(text: str, lang: str) -> str:
         except (ValueError, NotImplementedError):
             return value
 
+    # "10GB" -> "10 GB" first, otherwise the voice reads "tenGB" as one word.
+    text = NUMBER_UNIT_RE.sub(r"\1 \2", text)
     return NUMBER_RE.sub(repl, text)
 
 
