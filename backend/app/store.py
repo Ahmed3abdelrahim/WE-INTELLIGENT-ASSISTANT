@@ -74,14 +74,58 @@ async def create_conversation(session_id: str, title: str | None) -> dict:
 
 
 async def list_conversations(session_id: str) -> list[dict]:
+    """Newest activity first. `title` falls back to the first user message so the history
+    list is readable without anyone naming chats; `last_message_at` / `message_count` let the
+    UI group by day and hide empty chats."""
     async with aiosqlite.connect(config.DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         cur = await db.execute(
-            "SELECT id, title, created_at FROM conversations WHERE session_id=? ORDER BY created_at DESC",
+            """SELECT c.id, c.created_at,
+                      COALESCE(c.title, (SELECT m.text FROM messages m
+                                         WHERE m.conversation_id = c.id AND m.role = 'user'
+                                         ORDER BY m.created_at LIMIT 1)) AS title,
+                      (SELECT MAX(m.created_at) FROM messages m WHERE m.conversation_id = c.id) AS last_message_at,
+                      (SELECT COUNT(*) FROM messages m WHERE m.conversation_id = c.id) AS message_count
+               FROM conversations c WHERE c.session_id = ?
+               ORDER BY COALESCE(last_message_at, c.created_at) DESC""",
             (session_id,),
         )
         rows = await cur.fetchall()
-        return [dict(r) for r in rows]
+        out = []
+        for r in rows:
+            d = dict(r)
+            if d["title"] and len(d["title"]) > 80:
+                d["title"] = d["title"][:80].rstrip() + "…"
+            out.append(d)
+        return out
+
+
+async def rename_conversation(conversation_id: str, session_id: str, title: str) -> bool:
+    async with aiosqlite.connect(config.DB_PATH) as db:
+        cur = await db.execute(
+            "UPDATE conversations SET title=? WHERE id=? AND session_id=?", (title, conversation_id, session_id)
+        )
+        await db.commit()
+        return cur.rowcount > 0
+
+
+async def delete_conversation(conversation_id: str, session_id: str) -> list[str] | None:
+    """Deletes the conversation and its messages. Returns the audio paths to remove, or None
+    if the conversation doesn't belong to this session."""
+    async with aiosqlite.connect(config.DB_PATH) as db:
+        cur = await db.execute(
+            "SELECT 1 FROM conversations WHERE id=? AND session_id=?", (conversation_id, session_id)
+        )
+        if not await cur.fetchone():
+            return None
+        cur = await db.execute(
+            "SELECT audio_path FROM messages WHERE conversation_id=? AND audio_path IS NOT NULL", (conversation_id,)
+        )
+        audio = [r[0] for r in await cur.fetchall()]
+        await db.execute("DELETE FROM messages WHERE conversation_id=?", (conversation_id,))
+        await db.execute("DELETE FROM conversations WHERE id=?", (conversation_id,))
+        await db.commit()
+        return audio
 
 
 async def get_conversation(conversation_id: str, session_id: str) -> dict | None:

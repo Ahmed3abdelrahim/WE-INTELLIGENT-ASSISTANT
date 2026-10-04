@@ -1,6 +1,6 @@
 from typing import Any, Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class HealthResponse(BaseModel):
@@ -17,6 +17,12 @@ class ConversationOut(BaseModel):
     id: str
     title: str | None
     created_at: str
+    last_message_at: str | None = None
+    message_count: int = 0
+
+
+class ConversationRename(BaseModel):
+    title: str = Field(min_length=1, max_length=120)
 
 
 class MessageOut(BaseModel):

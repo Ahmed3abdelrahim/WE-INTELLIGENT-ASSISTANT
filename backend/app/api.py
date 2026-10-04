@@ -18,16 +18,18 @@ from .ingestion.loaders import detect_doc_type, load_document
 from .pipeline import answer as pipeline_answer
 from .retrieval.embed import encode
 from .retrieval.index import upsert_chunks
-from .schemas import ChatRequest, ConversationCreate, ConversationOut, HealthResponse
+from .schemas import ChatRequest, ConversationCreate, ConversationOut, ConversationRename, HealthResponse
 from .speech_text import clean_for_tts, voice_for_lang
 from .store import (
     create_conversation,
     create_document,
+    delete_conversation,
     get_conversation,
     get_message,
     get_messages,
     list_conversations,
     list_documents,
+    rename_conversation,
     set_insights,
     update_document,
     update_message_audio,
@@ -72,6 +74,30 @@ async def post_conversation(body: ConversationCreate, session_id: str = Header(d
 async def get_conversations(session_id: str = Header(default=None, alias="X-Session-Id")):
     sid = session_id or str(uuid.uuid4())
     return await list_conversations(sid)
+
+
+@router.patch("/conversations/{conversation_id}")
+async def patch_conversation(
+    conversation_id: str, body: ConversationRename, session_id: str = Header(default=None, alias="X-Session-Id")
+):
+    if not session_id or not await rename_conversation(conversation_id, session_id, body.title.strip()):
+        raise HTTPException(status_code=404, detail="conversation not found")
+    return {"id": conversation_id, "title": body.title.strip()}
+
+
+@router.delete("/conversations/{conversation_id}")
+async def remove_conversation(conversation_id: str, session_id: str = Header(default=None, alias="X-Session-Id")):
+    audio = await delete_conversation(conversation_id, session_id) if session_id else None
+    if audio is None:
+        raise HTTPException(status_code=404, detail="conversation not found")
+    for path in audio:
+        try:
+            p = Path(path)
+            if p.resolve().is_relative_to(config.AUDIO_DIR.resolve()):
+                p.unlink(missing_ok=True)
+        except OSError:
+            pass
+    return {"deleted": conversation_id}
 
 
 @router.get("/conversations/{conversation_id}/messages")
