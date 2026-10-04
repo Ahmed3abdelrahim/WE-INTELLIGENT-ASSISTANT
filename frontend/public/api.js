@@ -27,7 +27,7 @@ async function apiFetch(path, options = {}) {
 function parseSseEvent(rawEvent) {
   let event = "message";
   let dataLines = [];
-  for (const line of rawEvent.split("\n")) {
+  for (const line of rawEvent.split(/\r\n|\r|\n/)) {
     if (line.startsWith("event:")) event = line.slice(6).trim();
     else if (line.startsWith("data:")) dataLines.push(line.slice(5).trim());
     // lines starting with ":" are SSE comments/pings — ignored
@@ -87,10 +87,12 @@ const Api = {
       const { done, value } = await reader.read();
       if (done) break;
       buf += decoder.decode(value, { stream: true });
-      let idx;
-      while ((idx = buf.indexOf("\n\n")) >= 0) {
-        const rawEvent = buf.slice(0, idx);
-        buf = buf.slice(idx + 2);
+      // SSE allows CRLF, LF or CR line endings; sse-starlette sends CRLF ("\r\n\r\n" between
+      // events), so a plain "\n\n" search never matches and no event is ever parsed.
+      let m;
+      while ((m = /\r\n\r\n|\n\n|\r\r/.exec(buf)) !== null) {
+        const rawEvent = buf.slice(0, m.index);
+        buf = buf.slice(m.index + m[0].length);
         const parsed = parseSseEvent(rawEvent);
         if (parsed) yield parsed;
       }
