@@ -23,25 +23,92 @@ STRIP_TAGS = ["nav", "header", "footer", "script", "style", "noscript", "svg", "
 BLOCK_TAGS = {"p", "li", "h1", "h2", "h3", "h4", "h5", "h6", "table", "blockquote"}
 
 
+def _span(cell: Tag, attr: str) -> int:
+    try:
+        return max(1, min(int(cell.get(attr, 1)), 50))
+    except (TypeError, ValueError):
+        return 1
+
+
+def _table_grid(table: Tag) -> list[list[tuple[str, bool]]]:
+    """Expand colspan/rowspan into a rectangular grid of (text, is_th). Without this, te.eg's
+    two-row-header price tables (e.g. FAQ "Fixed Internet Bundle" x WE Gold price points)
+    lost every column after the first span and came out as "col3: 775, col4: 1050"."""
+    grid: list[list[tuple[str, bool] | None]] = []
+    for r, tr in enumerate(table.find_all("tr")):
+        while len(grid) <= r:
+            grid.append([])
+        row = grid[r]
+        c = 0
+        for cell in tr.find_all(["th", "td"], recursive=False):
+            while c < len(row) and row[c] is not None:
+                c += 1  # skip slots already filled by a rowspan from above
+            value = (cell.get_text(" ", strip=True), cell.name == "th")
+            for dr in range(_span(cell, "rowspan")):
+                while len(grid) <= r + dr:
+                    grid.append([])
+                target = grid[r + dr]
+                for dc in range(_span(cell, "colspan")):
+                    while len(target) <= c + dc:
+                        target.append(None)
+                    target[c + dc] = value
+            c += _span(cell, "colspan")
+    width = max((len(row) for row in grid), default=0)
+    return [[cell or ("", False) for cell in row] + [("", False)] * (width - len(row)) for row in grid]
+
+
 def _table_to_rows(table: Tag) -> list[dict]:
-    rows_raw = []
-    for tr in table.find_all("tr"):
-        cells = [c.get_text(" ", strip=True) for c in tr.find_all(["th", "td"])]
-        if any(cells):
-            rows_raw.append(cells)
-    if not rows_raw:
+    """SPEC.md section 7: one "header: value" block per table row. Leading rows made mostly
+    of <th> cells are all header rows; their labels are combined per column ("WE Gold &
+    Fixed Internet Upgrade Fees (in EGP) / 260")."""
+    grid = [row for row in _table_grid(table) if any(text for text, _ in row)]
+    if not grid:
         return []
-    header = rows_raw[0]
+    n_header = 0
+    for row in grid[:-1]:  # always leave at least one body row
+        if sum(is_th for _, is_th in row) * 2 < len(row):
+            break
+        n_header += 1
+    n_header = n_header or 1
+    # Per column: (group label from the upper header rows, leaf label from the lowest one).
+    headers = []
+    for col in range(len(grid[0])):
+        parts: list[str] = []
+        for row in grid[:n_header]:
+            text = row[col][0]
+            if text and text not in parts:
+                parts.append(text)
+        headers.append((" / ".join(parts[:-1]), parts[-1] if parts else ""))
+
     blocks = []
-    body_rows = rows_raw[1:] if len(rows_raw) > 1 else rows_raw
-    for row in body_rows:
-        pairs = []
-        for i, val in enumerate(row):
-            key = header[i] if i < len(header) and header[i] else f"col{i + 1}"
-            if val:
-                pairs.append(f"{key}: {val}")
-        if pairs:
-            blocks.append({"type": "table_row", "text": ", ".join(pairs)})
+    for row in grid[n_header:] if len(grid) > n_header else grid:
+        pieces: list[str] = []
+        group_items: list[str] = []
+        group = None
+        seen = set()
+
+        def flush():
+            if group_items:
+                pieces.append(f"{group}: " + "; ".join(group_items))
+                group_items.clear()
+
+        for col, (val, _) in enumerate(row):
+            grp, leaf = headers[col]
+            if not val or val in ("-", "–") or val in (leaf, grp) or (grp, leaf, val) in seen:
+                continue  # empty / not-applicable / a header cell rowspanned down / colspan copy
+            seen.add((grp, leaf, val))
+            if grp:  # "WE Gold & ... Fees (in EGP): 260 = Free; 525 = Free"
+                if grp != group:
+                    flush()
+                    group = grp
+                group_items.append(f"{leaf} = {val}")
+            else:
+                flush()
+                group = None
+                pieces.append(f"{leaf}: {val}" if leaf else val)
+        flush()
+        if pieces:
+            blocks.append({"type": "table_row", "text": ", ".join(pieces)})
     return blocks
 
 

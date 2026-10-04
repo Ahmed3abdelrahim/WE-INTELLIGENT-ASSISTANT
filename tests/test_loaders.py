@@ -1,6 +1,8 @@
 import os
 
-from app.ingestion.loaders import detect_doc_type, load_docx, load_html, load_image, load_pdf, load_txt
+from bs4 import BeautifulSoup
+
+from app.ingestion.loaders import _table_to_rows, detect_doc_type, load_docx, load_html, load_image, load_pdf, load_txt
 
 FIXTURES = os.path.join(os.path.dirname(__file__), "fixtures")
 
@@ -83,3 +85,30 @@ def test_png_ocr_extracts_text():
     title, blocks = load_image(_read("store_locations.png"))
     assert all(b["ocr"] is True for b in blocks)
     assert any("Store Locations" in b["text"] for b in blocks)
+
+
+# te.eg price tables use two-row headers with colspan/rowspan; the old parser produced
+# "col3: 775, col4: 1050" (see docs/decisions.md).
+def test_table_with_two_row_header_and_spans():
+    html = """<table>
+      <tr><th rowspan="2">Fixed Internet Bundle</th><th colspan="3">WE Gold Upgrade Fees (EGP)</th></tr>
+      <tr><th>260</th><th>525</th><th>775</th></tr>
+      <tr><td>Super 250 GBs</td><td>135</td><td>135</td><td>Free</td></tr>
+      <tr><td>Max 1TB</td><td>-</td><td colspan="2">613</td></tr>
+    </table>"""
+    rows = [r["text"] for r in _table_to_rows(BeautifulSoup(html, "lxml").table)]
+    assert rows == [
+        "Fixed Internet Bundle: Super 250 GBs, WE Gold Upgrade Fees (EGP): 260 = 135; 525 = 135; 775 = Free",
+        "Fixed Internet Bundle: Max 1TB, WE Gold Upgrade Fees (EGP): 525 = 613; 775 = 613",
+    ]
+    assert not any("col" in r for r in rows)
+
+
+def test_rowspan_body_cell_repeats_for_each_row():
+    html = """<table>
+      <tr><th>Plan</th><th>Add-on</th><th>Price</th></tr>
+      <tr><td rowspan="2">WE LIFE 375</td><td>beIN</td><td>445</td></tr>
+      <tr><td>OSN</td><td>385</td></tr>
+    </table>"""
+    rows = [r["text"] for r in _table_to_rows(BeautifulSoup(html, "lxml").table)]
+    assert rows == ["Plan: WE LIFE 375, Add-on: beIN, Price: 445", "Plan: WE LIFE 375, Add-on: OSN, Price: 385"]
