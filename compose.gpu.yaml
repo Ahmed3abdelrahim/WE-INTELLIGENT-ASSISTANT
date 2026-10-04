@@ -1,7 +1,9 @@
 # Overlay: run LLM + ASR on an NVIDIA GPU.
 # Usage: docker compose -f compose.yaml -f compose.gpu.yaml up
-# UNTESTED on this laptop: no NVIDIA GPU is present (section 0 of SPEC.md).
-# Validated only with: docker compose -f compose.yaml -f compose.gpu.yaml config
+# The same flags were verified natively on an RTX 3080 (scripts/native_up.sh with LLM_NGL=99,
+# ASR_DEVICE=cuda); the Docker overlay itself could not be run there (no Docker in the
+# container). The backend image ships CPU-only torch, so in Docker the embedder/reranker
+# stay on CPU; the native GPU path runs them on CUDA (EMBED_DEVICE=cuda).
 
 services:
   llm:
@@ -9,7 +11,12 @@ services:
     command: >
       --model /models/${LLM_LOCAL_MODEL:-qwen3-4b-q4_k_m}.gguf
       --jinja
-      --ctx-size 4096
+      --parallel ${LLM_PARALLEL:-4}
+      --ctx-size ${LLM_CTX_TOTAL:-16384}
+      --flash-attn on
+      --cache-type-k ${LLM_KV_TYPE:-q8_0}
+      --cache-type-v ${LLM_KV_TYPE:-q8_0}
+      --cache-ram ${LLM_CACHE_RAM:-1024}
       --threads ${LLM_THREADS:-8}
       --n-gpu-layers 99
       --host 0.0.0.0

@@ -92,7 +92,7 @@ def main():
     smi = per_pid_mib()
 
     llm = smi.get(pids.get("llm"), 0)
-    rows.append(("llm (llama-server, Qwen3-4B Q4_K_M, ctx 4096, -ngl 99)", llm, llm))
+    rows.append((f"llm (llama-server, Qwen3-4B Q4_K_M, -ngl 99, {os.environ.get('LLM_PARALLEL', '4')} slots x 4096 ctx, {os.environ.get('LLM_KV_TYPE', 'q8_0')} KV)", llm, llm))
 
     asr_pid = pids.get("asr")
     asr_idle = smi.get(asr_pid, 0)

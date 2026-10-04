@@ -24,6 +24,14 @@ export LLM_NGL="${LLM_NGL:-0}"
 # llama-server keeps a host-RAM prompt cache that fills up to 8 GiB by default before evicting;
 # cap it so it can't take half the machine's RAM (0 disables it).
 export LLM_CACHE_RAM="${LLM_CACHE_RAM:-1024}"
+# Concurrency: llama-server's slots share ONE KV pool of --ctx-size tokens. With the old fixed
+# --ctx-size 4096 and 4 auto slots, two simultaneous RAG questions (~2.5k tokens each) filled
+# it and the rest failed with "Context size has been exceeded". Size the pool per slot, and
+# store the KV cache in q8_0 (half of f16, negligible quality loss) so 4 slots fit a 10 GB GPU.
+export LLM_PARALLEL="${LLM_PARALLEL:-4}"
+export LLM_CTX_PER_SLOT="${LLM_CTX_PER_SLOT:-4096}"
+export LLM_KV_TYPE="${LLM_KV_TYPE:-q8_0}"
+LLM_CTX_TOTAL=$((LLM_PARALLEL * LLM_CTX_PER_SLOT))
 export EMBED_DEVICE="${EMBED_DEVICE:-cpu}"
 # Reranker: better ranking + the evidence gate (min_rerank_score). Cheap on GPU, slow on CPU.
 export RERANKER_ENABLED="${RERANKER_ENABLED:-false}"
@@ -53,7 +61,9 @@ LLM_GGUF="$REPO_ROOT/models/llm/qwen3-4b-q4_k_m.gguf"
 if [ -f "$LLM_GGUF" ]; then
   LD_LIBRARY_PATH="$LLAMA_DIR:${CONDA_PREFIX:-}/lib" \
     start llm "$LLAMA_DIR/llama-server" \
-    --model "$LLM_GGUF" --jinja --ctx-size 4096 --threads "$LLM_THREADS" \
+    --model "$LLM_GGUF" --jinja --threads "$LLM_THREADS" \
+    --parallel "$LLM_PARALLEL" --ctx-size "$LLM_CTX_TOTAL" \
+    --flash-attn on --cache-type-k "$LLM_KV_TYPE" --cache-type-v "$LLM_KV_TYPE" \
     --n-gpu-layers "$LLM_NGL" --cache-ram "$LLM_CACHE_RAM" \
     --host 127.0.0.1 --port 8081 \
     --reasoning off
