@@ -10,7 +10,7 @@ import arabic_reshaper
 import pymupdf
 from bidi.algorithm import get_display
 from docx import Document
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFont, features
 
 FIXTURES_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -48,12 +48,21 @@ def make_text_pdf():
     print("wrote", out)
 
 
+# Pillow built with libraqm shapes and orders RTL text itself; pre-applying reshaper + bidi on
+# top of that reversed every line twice, so the fixture showed backwards, unjoined Arabic and
+# OCR (correctly) read it backwards. Only do it manually when raqm isn't available.
+_RAQM = features.check("raqm")
+
+
 def _shape(text):
-    return get_display(arabic_reshaper.reshape(text))
+    return text if _RAQM else get_display(arabic_reshaper.reshape(text))
 
 
 def _draw_shaped_arabic(draw, xy, text, font, fill="black"):
-    draw.text(xy, _shape(text), fill=fill, font=font)
+    if _RAQM:
+        draw.text(xy, text, fill=fill, font=font, direction="rtl", language="ar")
+    else:
+        draw.text(xy, _shape(text), fill=fill, font=font)
 
 
 def make_arabic_pdf():
@@ -76,7 +85,7 @@ def make_arabic_pdf():
     font = ImageFont.truetype(ARABIC_FONT, 36)
     y = 50
     for line in lines:
-        bbox = draw.textbbox((0, 0), _shape(line), font=font)
+        bbox = draw.textbbox((0, 0), _shape(line), font=font, **({"direction": "rtl", "language": "ar"} if _RAQM else {}))
         text_width = bbox[2] - bbox[0]
         _draw_shaped_arabic(draw, (1190 - text_width, y), line, font)
         y += 110

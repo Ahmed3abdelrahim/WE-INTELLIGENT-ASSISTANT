@@ -43,15 +43,17 @@ def test_scanned_pdf_triggers_ocr_and_recovers_text():
 
 def test_arabic_pdf_triggers_ocr():
     # Rendered as an image (see tests/fixtures/generate_fixtures.py) so it must OCR, not
-    # extract a text layer. Tesseract's Arabic accuracy on synthetic renders is imperfect
-    # (documented limitation), so this only asserts OCR ran and recovered the numbers,
-    # not perfect letter-for-letter Arabic text.
+    # extract a text layer. The words are asserted too: an earlier fixture drew the Arabic
+    # reversed (bidi applied twice), OCR read it back reversed, and a numbers-only check
+    # still passed while retrieval on the text was useless.
     title, blocks = load_pdf(_read("arabic_pdf.pdf"))
     assert blocks
     assert all(b["ocr"] is True for b in blocks)
     joined = " ".join(b["text"] for b in blocks)
     assert "299" in joined
     assert "100" in joined
+    assert "باقات إنترنت المنزل" in joined
+    assert "مدة العقد" in joined
 
 
 def test_docx_table_becomes_header_value_rows():
