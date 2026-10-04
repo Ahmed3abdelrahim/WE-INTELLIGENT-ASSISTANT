@@ -360,3 +360,55 @@ LLM-dependent step is unreliable in this specific headless-automation environmen
   contention from other processes on the host (stray orphaned `qdrant` process, prior
   Chromium runs) rather than a code bug; the reranker's own per-call latency was separately
   confirmed fast (0.34s for 3 short passages) once isolated.
+
+---
+
+## Phase 6 — README, notebook, slides, architecture.md, demo_script.md
+
+**Status: DONE.**
+
+**Built**
+- `README.md`: real tested specs, exact run sequence (both the spec'd Docker path and the
+  native fallback actually used), model license table (every license verified for real this
+  session via ModelScope/GitHub API calls or the model's own on-disk README, not memory),
+  measured latency summary, full limitations list.
+- `docs/architecture.md`: container topology, request-flow walkthrough, ingestion pipeline —
+  describing what was actually built, with a clear note on the native-vs-container runtime
+  distinction for this session.
+- `docs/demo_script.md`: the 7-step demo per SPEC.md section 11.
+- `notebooks/walkthrough.ipynb` (`scripts/make_notebook.py` generates it): imports backend
+  modules directly and calls the real running services — no duplicated logic.
+- `slides/we_assistant.pptx` (`scripts/make_slides.py` generates it): the 10 slides per
+  SPEC.md section 11, using only real numbers gathered this session.
+
+**Commands run / real results**
+- **The notebook was actually executed top-to-bottom** against the live stack (`nbclient`,
+  not just visually inspected): all 16 cells ran with **zero errors**. Found and fixed a
+  real bug while doing this — the first draft used `asyncio.run(...)` inside async cells,
+  which fails inside a running Jupyter kernel (classic gotcha: the kernel already has its
+  own event loop); fixed by using bare `await` at cell top-level instead (which Jupyter
+  supports natively). The committed notebook is the **executed** version with real outputs
+  baked in: a real ASR transcript, a real document ingested into Qdrant live, real hybrid
+  search scores (the freshly-uploaded doc scored 1.0, an official FAQ page scored 0.34 for
+  the same query), a real cited answer, and real `speech_text` cleanup output.
+  - Minor cosmetic finding from the real output, not fixed (out of scope for this PoC):
+    `num2words` output concatenates directly against an adjacent unit with no original
+    space (e.g. source text "10GB" → "tenGB" after verbalization) — readable but a little
+    rough for TTS. A small regex tweak (insert a space between a verbalized number and a
+    following unit abbreviation) would clean this up; noted here rather than silently fixed
+    without re-verifying, given time constraints.
+- `python scripts/make_slides.py`: 10 slides generated; re-opened and validated with
+  python-pptx (titles print back in the exact spec'd order).
+- `docker compose config` re-validated for all three compose files after all of this
+  session's edits (base/`+gpu`/`+cloud`) — still green.
+- Full license table fact-checked for real (ModelScope/GitHub API calls, or the model's own
+  `README.md`/config on disk), not from memory: Qwen3-4B-GGUF Apache-2.0, bge-m3 MIT,
+  bge-reranker-v2-m3 Apache-2.0, faster-whisper (both sizes) MIT, piper-voices MIT,
+  llama.cpp MIT, Qdrant Apache-2.0.
+
+**Limitations**
+- The GPU overlay and OpenRouter cloud path remain untested in this session (no GPU, no
+  working key) — both are implemented and spec-complete, documented clearly as untested
+  rather than claimed working.
+- Physical Wi-Fi-off offline proof wasn't performed (sandboxed dev environment) —
+  architecturally verified instead (see README's "Offline operation" section).
