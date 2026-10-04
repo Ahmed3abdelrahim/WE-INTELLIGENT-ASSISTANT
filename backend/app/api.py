@@ -19,7 +19,7 @@ from .pipeline import answer as pipeline_answer
 from .retrieval.embed import encode
 from .retrieval.index import upsert_chunks
 from .schemas import ChatRequest, ConversationCreate, ConversationOut, ConversationRename, HealthResponse
-from .speech_text import clean_for_tts, voice_for_lang
+from .speech_text import clean_for_tts, echoes_hotwords, voice_for_lang
 from .store import (
     create_conversation,
     create_document,
@@ -161,6 +161,14 @@ async def post_transcribe(file: UploadFile = File(...), lang: str = Form(default
     )
 
     text = result.get("text", "").strip()
+    if text and echoes_hotwords(text, _load_hotwords()):
+        # Whisper read the hotword prompt back instead of the speech: transcribe again without it,
+        # and keep the retry unless it is no better.
+        logger.info("transcript echoed the hotword prompt (%r); retrying without hotwords", text[:80])
+        retry = await asr.transcribe(data, filename=file.filename or "audio.wav", language=lang, beam_size=1)
+        retry_text = retry.get("text", "").strip()
+        if not echoes_hotwords(retry_text, _load_hotwords()):
+            result, text = retry, retry_text
     no_speech_prob = result.get("no_speech_prob", 1.0)
     rejected, reason = False, None
 

@@ -57,3 +57,26 @@ def clean_for_tts(text: str, lang: str = "en") -> str:
 
 def voice_for_lang(lang: str) -> str:
     return "ar" if lang == "ar" else "en"
+
+
+def echoes_hotwords(transcript: str, hotwords: str) -> bool:
+    """True when an ASR transcript looks like the hotword prompt read back ("فاتورة. ما إنترنت
+    المنزل, فلما إنترنت المنزل ..."). faster-whisper feeds hotwords to the decoder as a prompt
+    and, on unclear or clipped audio, sometimes emits that prompt (with filler fragments)
+    instead of the speech. Trigger: 2+ hotword phrases making up at least 40% of the words.
+    False positives only cost one re-transcription without hotwords."""
+    from .generation.smalltalk import normalize  # same Arabic/punctuation normalisation
+
+    text = f" {normalize(transcript)} "
+    total = len(text.split())
+    if total == 0:
+        return False
+    phrases = sorted({normalize(p) for p in hotwords.split(",") if p.strip()}, key=len, reverse=True)
+    hits = hotword_words = 0
+    for phrase in phrases:
+        needle = f" {phrase} "
+        while needle in text:
+            text = text.replace(needle, " ", 1)
+            hits += 1
+            hotword_words += len(phrase.split())
+    return hits >= 2 and hotword_words / total >= 0.4

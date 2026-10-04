@@ -1,4 +1,4 @@
-from app.speech_text import clean_for_tts, voice_for_lang
+from app.speech_text import clean_for_tts, echoes_hotwords, voice_for_lang
 
 
 def test_citation_labels_stripped():
@@ -42,3 +42,24 @@ def test_voice_for_lang():
     assert voice_for_lang("ar") == "ar"
     assert voice_for_lang("en") == "en"
     assert voice_for_lang("auto") == "en"
+
+
+HOTWORDS = "WE, WE Telecom Egypt, تيداتا, إنترنت المنزل, فاتورة, باقة, إعادة شحن, واي فاي"
+
+
+def test_hotword_prompt_echo_detected():
+    # seen live: clipped audio came back as the hotword list itself
+    assert echoes_hotwords("ما إنترنت المنزل, فاتورة, باقة, إنترنت المنزل, فاتورة, باقة", HOTWORDS)
+    assert echoes_hotwords("WE Telecom Egypt, باقة، فاتورة.", HOTWORDS)
+
+
+def test_real_questions_mentioning_products_are_not_echoes():
+    assert not echoes_hotwords("عايز أعرف سعر باقة الإنترنت المنزلي", HOTWORDS)
+    assert not echoes_hotwords("What is the price of the WE Air package?", HOTWORDS)
+    assert not echoes_hotwords("باقة", HOTWORDS)  # a one-word answer is not an echo
+
+
+def test_echo_with_filler_fragments_detected():
+    # second variant seen live: prompt words mixed with fragments
+    assert echoes_hotwords("فاتورة. ما إنترنت المنزل, فلما إنترنت المنزل, فلما إنترنت", HOTWORDS)
+
