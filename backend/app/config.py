@@ -41,13 +41,17 @@ class Config:
     QDRANT_COLLECTION = "we_chunks"
 
     # --- Retrieval / pipeline ---
-    RERANKER_ENABLED = os.environ.get("RERANKER_ENABLED", "false").lower() == "true"
+    # env var wins; otherwise settings.yaml (retrieval.reranker_enabled)
+    RERANKER_ENABLED = os.environ.get(
+        "RERANKER_ENABLED", str(SETTINGS["retrieval"]["reranker_enabled"])
+    ).lower() == "true"
     # "cpu" (default) or "cuda" / "cuda:0"; fp16 is used automatically on GPU.
     EMBED_DEVICE = os.environ.get("EMBED_DEVICE", "cpu")
     DENSE_TOP_K = SETTINGS["retrieval"]["dense_top_k"]
     SPARSE_TOP_K = SETTINGS["retrieval"]["sparse_top_k"]
     FINAL_TOP_K = SETTINGS["retrieval"]["final_top_k"]
     MIN_SCORE_THRESHOLD = SETTINGS["retrieval"]["min_score_threshold"]
+    MIN_RERANK_SCORE = SETTINGS["retrieval"]["min_rerank_score"]
     RERANK_CANDIDATE_POOL = SETTINGS["retrieval"]["rerank_candidate_pool"]
 
     MAX_CONTEXT_TOKENS = SETTINGS["context"]["max_context_tokens"]

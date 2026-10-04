@@ -8,6 +8,10 @@ retrieval:
   # Minimum fused RRF score to accept a retrieval as "sufficient evidence".
   # Starting value; re-tuned in Phase 5 against eval/questions.jsonl and documented in eval/results.md.
   min_score_threshold: 0.015
+  # Used instead of min_score_threshold whenever the reranker runs: the top passage's
+  # bge-reranker-v2-m3 relevance (0-1). Off-topic queries score ~0.000-0.002; tuned against
+  # eval/questions.jsonl + an off-topic/injection set (see docs/decisions.md).
+  min_rerank_score: 0.02
   reranker_enabled: false
   rerank_candidate_pool: 10
 

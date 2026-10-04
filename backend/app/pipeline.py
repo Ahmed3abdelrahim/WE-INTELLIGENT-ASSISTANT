@@ -2,7 +2,8 @@
 import time
 
 from .config import config
-from .generation.answer import rewrite_standalone_query, stream_answer
+from .generation import guard, smalltalk
+from .generation.answer import regenerate_answer, route_query, stream_answer
 from .generation.citations import validate as validate_citations
 from .ingestion.arabic import detect_lang
 from .ingestion.chunking import count_tokens
@@ -32,6 +33,7 @@ def hits_to_sources(hits: list[dict]) -> list[dict]:
                 "section": h.get("section"),
                 "text": h.get("text", ""),
                 "url_or_file": url_or_file,
+                "source_type": h.get("source_type"),
             }
         )
     return sources
@@ -81,15 +83,54 @@ async def answer(
 
     await add_message(conversation_id, "user", text, input_mode, lang)
 
-    query = text
-    if history:
-        t0 = time.time()
-        try:
-            query = await rewrite_standalone_query(history, text, provider)
-        except Exception:  # noqa: BLE001 — fall back to raw text on any rewrite failure
-            query = text
-        timings["rewrite_ms"] = round((time.time() - t0) * 1000, 1)
+    async def fixed_reply(status: str, answer_text: str):
+        """Small talk / refusals / no-evidence: a stored reply with no LLM answer, no citation."""
+        timings["total_ms"] = round((time.time() - t_start) * 1000, 1)
+        msg = await add_message(
+            conversation_id, "assistant", answer_text, input_mode, lang, [], None, timings
+        )
+        return "final", {
+            "message_id": msg["id"],
+            "answer": answer_text,
+            "status": status,
+            "lang": lang,
+            "citations": [],
+            "timings": timings,
+        }
 
+    # 1. Greetings / "who are you" / thanks / bye: fixed reply, no retrieval, no LLM.
+    smalltalk_kind = smalltalk.classify(text)
+    if smalltalk_kind:
+        yield await fixed_reply("smalltalk", smalltalk.reply(smalltalk_kind, lang))
+        return
+
+    # 2. Obvious prompt-injection phrasing: refused without any LLM call.
+    if guard.looks_like_injection(text):
+        yield await fixed_reply("refused", guard.refusal("injection", lang))
+        return
+
+    # 3. LLM router: scope check + standalone, typo-free search query. A router failure
+    #    degrades to "plain question with the raw text", never to a refusal.
+    t0 = time.time()
+    try:
+        route = await route_query(history, text, bool(doc_ids), provider)
+    except Exception:  # noqa: BLE001
+        route = {"type": "question", "query": text}
+    timings["route_ms"] = round((time.time() - t0) * 1000, 1)
+    if route["type"] == "smalltalk":
+        yield await fixed_reply("smalltalk", smalltalk.reply("identity", lang))
+        return
+    if route["type"] == "injection":
+        yield await fixed_reply("refused", guard.refusal("injection", lang))
+        return
+    if route["type"] == "off_topic" and not doc_ids:
+        # With documents attached the user may ask about anything in them; the evidence
+        # gate below still applies.
+        yield await fixed_reply("out_of_scope", guard.refusal("off_topic", lang))
+        return
+    query = route["query"]
+
+    # 4. Retrieval + evidence gate.
     t0 = time.time()
     try:
         hits = hybrid_search(query, session_id, doc_ids)
@@ -98,26 +139,20 @@ async def answer(
         return
     timings["retrieval_ms"] = round((time.time() - t0) * 1000, 1)
 
-    top_score = hits[0]["score"] if hits else 0.0
-    if not hits or top_score < config.MIN_SCORE_THRESHOLD:
-        status = "insufficient_evidence"
-        answer_text = (
+    # The reranker's score is an absolute 0-1 relevance; the RRF fusion score is rank-based
+    # (anything ranked first scores ~1/61 ≈ 0.016), so the old RRF threshold almost never
+    # rejected anything. Gate on the reranker whenever it ran.
+    if hits and "rerank_score" in hits[0]:
+        enough_evidence = hits[0]["rerank_score"] >= config.MIN_RERANK_SCORE
+    else:
+        enough_evidence = bool(hits) and hits[0]["score"] >= config.MIN_SCORE_THRESHOLD
+    if not enough_evidence:
+        yield await fixed_reply(
+            "insufficient_evidence",
             "عذرًا، لا تحتوي المصادر المتاحة على معلومات كافية للإجابة على هذا السؤال."
             if lang == "ar"
-            else "Sorry, the available sources don't have enough information to answer that."
+            else "Sorry, the available sources don't have enough information to answer that.",
         )
-        timings["total_ms"] = round((time.time() - t_start) * 1000, 1)
-        msg = await add_message(
-            conversation_id, "assistant", answer_text, input_mode, lang, [], None, timings
-        )
-        yield "final", {
-            "message_id": msg["id"],
-            "answer": answer_text,
-            "status": status,
-            "lang": lang,
-            "citations": [],
-            "timings": timings,
-        }
         return
 
     sources = _truncate_sources_to_budget(hits_to_sources(hits), config.MAX_CONTEXT_TOKENS)
@@ -127,7 +162,7 @@ async def answer(
     t0 = time.time()
     chunks: list[str] = []
     try:
-        async for token in stream_answer(lang, history, query, sources, provider):
+        async for token in stream_answer(lang, query, sources, provider):
             chunks.append(token)
             yield "token", {"text": token}
     except Exception as e:  # noqa: BLE001
@@ -136,6 +171,19 @@ async def answer(
     timings["llm_ms"] = round((time.time() - t0) * 1000, 1)
 
     raw_answer = "".join(chunks)
+    if guard.wrong_language(raw_answer, lang):
+        # The final event replaces the streamed text in the UI, so the retry is what's shown.
+        t0 = time.time()
+        try:
+            retry = await regenerate_answer(lang, query, sources, provider)
+            if not guard.wrong_language(retry, lang):
+                raw_answer = retry
+        except Exception:  # noqa: BLE001 — keep the streamed answer
+            pass
+        timings["regenerate_ms"] = round((time.time() - t0) * 1000, 1)
+    if guard.leaks_system_prompt(raw_answer):
+        yield await fixed_reply("refused", guard.refusal("injection", lang))
+        return
     validated = validate_citations(raw_answer, sources)
 
     status = "answered"

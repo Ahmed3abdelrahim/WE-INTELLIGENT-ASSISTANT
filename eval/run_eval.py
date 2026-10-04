@@ -135,7 +135,8 @@ def summarize_pipeline(results):
     for q, final, total_ms in results:
         if not q["answerable"]:
             n_unanswerable += 1
-            if final and final.get("status") == "insufficient_evidence":
+            # out_of_scope / refused come from the router guard (not answered = abstained)
+            if final and final.get("status") in ("insufficient_evidence", "out_of_scope", "refused"):
                 correct_abstention += 1
         else:
             if final and final.get("status") == "answered":

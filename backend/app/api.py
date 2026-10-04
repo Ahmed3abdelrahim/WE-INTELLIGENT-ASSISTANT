@@ -1,4 +1,5 @@
 import json
+import logging
 import uuid
 from pathlib import Path
 
@@ -10,6 +11,7 @@ from .clients.asr import ASRClient
 from .clients.llm import LLMClient
 from .clients.tts import TTSClient
 from .config import CONFIG_DIR, config
+from .generation import guard
 from .generation.insights import compute_insights
 from .ingestion.chunking import chunk_blocks
 from .ingestion.loaders import detect_doc_type, load_document
@@ -32,6 +34,7 @@ from .store import (
 )
 
 router = APIRouter()
+logger = logging.getLogger("we-assistant")
 
 
 def get_session_id(x_session_id: str | None = Header(default=None)) -> str:
@@ -218,6 +221,12 @@ async def post_documents(
 
         title, blocks = load_document(doc_type, data)
         title = title or file.filename or "upload"
+        # Uploaded text is untrusted: remove sentences aimed at the assistant's instructions.
+        removed_injections = 0
+        for b in blocks:
+            b["text"], n = guard.strip_injections(b["text"])
+            removed_injections += n
+        blocks = [b for b in blocks if b["text"].strip()]
         chunks = chunk_blocks(blocks)
 
         if not chunks:
@@ -249,7 +258,12 @@ async def post_documents(
 
         pages = max((c.get("page") or 0 for c in chunks), default=0) or None
         await update_document(did, "ready", pages=pages, chunks=len(payloads))
-        return {"id": did, "filename": file.filename, "type": doc_type, "status": "ready", "pages": pages, "chunks": len(payloads)}
+        if removed_injections:
+            logger.warning("document %s: removed %d instruction-like sentence(s)", did, removed_injections)
+        return {
+            "id": did, "filename": file.filename, "type": doc_type, "status": "ready", "pages": pages,
+            "chunks": len(payloads), "removed_instructions": removed_injections,
+        }
     except HTTPException:
         raise
     except Exception as e:  # noqa: BLE001

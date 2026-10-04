@@ -106,7 +106,7 @@ from app.generation.prompts import build_messages
 
 lang = resolve_lang("auto", question)
 sources = hits_to_sources(hits)
-messages = build_messages(lang, [], question, sources)
+messages = build_messages(lang, question, sources)
 for m in messages:
     print(f"--- {m['role']} ---")
     print(m["content"][:800])
