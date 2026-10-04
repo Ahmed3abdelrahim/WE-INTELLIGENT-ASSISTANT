@@ -3,6 +3,7 @@ import re
 
 CITATION_RE = re.compile(r"\[S(\d+)\]")
 NUMBER_RE = re.compile(r"\d+(?:[.,]\d+)*")
+LIST_MARKER_RE = re.compile(r"^\s*\d+[.)]\s+", re.M)
 
 # Arabic-Indic (U+0660-0669) and Extended Arabic-Indic/Persian (U+06F0-06F9) digits ->
 # ASCII, so "١١١" and "111" compare equal (found via real Arabic-answer testing: a true
@@ -36,8 +37,11 @@ def validate(answer_text: str, sources: list[dict]) -> dict:
         cleaned = cleaned.replace(f"[{lbl}]", "")
 
     # Strip citation markers before scanning for numbers — otherwise the "1" in "[S1]"
-    # gets counted as a number in the answer and falsely flagged as unmatched.
+    # gets counted as a number in the answer and falsely flagged as unmatched. Same for the
+    # answer's own list numbering ("1. ...", "2) ..."): a 9-step answer was flagged because
+    # "8" and "9" weren't in the sources.
     text_without_markers = _normalize_digits(CITATION_RE.sub("", cleaned))
+    text_without_markers = LIST_MARKER_RE.sub("", text_without_markers)
     cited_text_blob = _normalize_digits(" ".join(label_map[lbl]["text"] for lbl in valid_labels))
     numbers_in_answer = set(NUMBER_RE.findall(text_without_markers))
     numbers_in_sources = set(NUMBER_RE.findall(cited_text_blob))

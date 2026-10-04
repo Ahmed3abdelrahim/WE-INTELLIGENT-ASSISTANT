@@ -66,3 +66,14 @@ def test_hallucinated_number_still_flagged():
     # A number with no counterpart anywhere in the cited source(s) must still be caught.
     result = validate("The price is 999 EGP [S1].", SOURCES)
     assert result["numeric_warning"] is True
+
+
+def test_list_numbering_is_not_a_fact_to_verify():
+    """A 9-step answer was flagged numeric_warning because "8" and "9" (its own list
+    numbering) don't appear in the sources."""
+    sources = [{"label": "S1", "title": "kb", "url": None, "filename": "kb.docx", "page": None,
+                "section": None, "text": "Choose the invoice type, then add the customer."}]
+    answer = "\n".join(f"{i}. step [S1]." for i in range(1, 10))
+    assert validate(answer, sources)["numeric_warning"] is False
+    # a real unverified number inside a list item is still caught
+    assert validate("1. It costs 450 EGP [S1].", sources)["numeric_warning"] is True
