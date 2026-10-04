@@ -68,7 +68,12 @@ INSIGHTS_SYSTEM = (
     "Analyze this WE Telecom Egypt customer conversation. Respond with ONLY a JSON object "
     'matching this schema: {"intent": str, "products": [str], "language": str, '
     '"dialect": str|null, "sentiment": "positive"|"neutral"|"negative", "resolved": bool, '
-    '"needs_escalation": bool, "summary": str}. No other text.'
+    '"needs_escalation": bool, "summary": str}. No other text. '
+    'For "dialect", judge ONLY the customer\'s own wording — the company being Egyptian says '
+    'nothing about the customer\'s dialect. Use "Egyptian" only if the customer uses '
+    "Egyptian-specific words (e.g. عايز، إزاي، إيه، ده، دي، مش، كده، فين، ليه، دلوقتي، قولي). "
+    'Use "MSA" for Arabic without dialect markers (e.g. مرحبا، من أنت، أريد، كيف، ما هي). '
+    'Use null if the customer wrote no Arabic.'
 )
 
 
