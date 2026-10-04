@@ -3,6 +3,8 @@
 Keeps each FAQ question with its answer and each run of table rows together as one
 atomic unit, then packs atomic units into token-budgeted chunks with overlap.
 """
+import re
+
 from ..config import SETTINGS, config
 
 _tokenizer = None
@@ -66,6 +68,45 @@ def _group_atomic_units(blocks: list[dict]) -> list[dict]:
     return units
 
 
+_SENTENCE_RE = re.compile(r"(?<=[.!?؟。])\s+")
+
+
+def _split_oversized(unit: dict, target_tokens: int) -> list[dict]:
+    """Atomic units are never split while packing, so one long table (or paragraph) used to
+    become a single chunk far over budget (largest te.eg chunk: ~825 words). Split such a unit
+    at line boundaries (table rows are self-contained "header: value" lines), then sentences,
+    then words as a last resort; every piece keeps the unit's section/page."""
+    if count_tokens(unit["text"]) <= target_tokens:
+        return [unit]
+    text = unit["text"]
+    if "\n" in text.strip():
+        parts = [p for p in text.split("\n") if p.strip()]
+        joiner = "\n"
+    else:
+        parts = [p for p in _SENTENCE_RE.split(text) if p.strip()]
+        joiner = " "
+    if len(parts) == 1:  # one huge sentence: fall back to words
+        parts, joiner = text.split(), " "
+
+    pieces, current, current_tokens = [], [], 0
+    for part in parts:
+        part_tokens = count_tokens(part)
+        if part_tokens > target_tokens:  # a single line/sentence over budget: split it further
+            if current:
+                pieces.append(joiner.join(current))
+                current, current_tokens = [], 0
+            pieces.extend(p["text"] for p in _split_oversized({**unit, "text": part}, target_tokens))
+            continue
+        if current and current_tokens + part_tokens > target_tokens:
+            pieces.append(joiner.join(current))
+            current, current_tokens = [], 0
+        current.append(part)
+        current_tokens += part_tokens
+    if current:
+        pieces.append(joiner.join(current))
+    return [{**unit, "text": p} for p in pieces]
+
+
 def chunk_blocks(blocks: list[dict], target_tokens: int | None = None, overlap_tokens: int | None = None) -> list[dict]:
     """Returns a list of {"text": str, "section": str|None} chunks."""
     if target_tokens is None:
@@ -73,7 +114,7 @@ def chunk_blocks(blocks: list[dict], target_tokens: int | None = None, overlap_t
     if overlap_tokens is None:
         overlap_tokens = SETTINGS["chunking"]["overlap_tokens"]
 
-    units = _group_atomic_units(blocks)
+    units = [piece for unit in _group_atomic_units(blocks) for piece in _split_oversized(unit, target_tokens)]
     chunks: list[dict] = []
     current_texts: list[str] = []
     current_tokens = 0
