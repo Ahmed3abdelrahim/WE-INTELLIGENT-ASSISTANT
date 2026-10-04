@@ -1,65 +1,82 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" dir="ltr">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>WE Assistant</title>
+  <script>
+    // Apply the saved theme / direction before first paint (no flash).
+    try {
+      const theme = localStorage.getItem("we_theme") || "system";
+      const dark = theme === "dark" || (theme === "system" && matchMedia("(prefers-color-scheme: dark)").matches);
+      document.documentElement.dataset.theme = dark ? "dark" : "light";
+      if (localStorage.getItem("we_ui_lang") === "ar") { document.documentElement.lang = "ar"; document.documentElement.dir = "rtl"; }
+    } catch (_) { /* storage blocked: defaults */ }
+  </script>
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
   <div id="app">
-    <header>
-      <h1>WE Assistant</h1>
-      <span id="provider-badge" class="provider-badge">local</span>
+    <header class="topbar">
+      <div class="brand">
+        <button id="sidebar-toggle" class="top-btn icon-only mobile-only" data-i18n-title="history"><span data-icon="menu"></span></button>
+        <span class="brand-mark">WE</span>
+        <h1 data-i18n="appTitle">WE Assistant</h1>
+        <span id="provider-badge" class="provider-badge">local</span>
+      </div>
+      <nav class="quick-actions">
+        <button id="qa-new" class="top-btn"><span data-icon="plus"></span><span class="label" data-i18n="newChat">New chat</span></button>
+        <button id="qa-insights" class="top-btn icon-only" data-i18n-title="insights"><span data-icon="chart"></span></button>
+        <button id="qa-theme" class="top-btn icon-only" data-i18n-title="themeToggle"><span data-icon="moon"></span></button>
+        <button id="qa-lang" class="top-btn" data-i18n-title="uiLangToggleTitle"><span data-icon="languages"></span><span class="label" data-i18n="uiLangToggle">ع</span></button>
+      </nav>
     </header>
     <div id="error-banner" class="error-banner hidden"></div>
 
     <div class="layout">
-      <aside class="sidebar">
-        <button id="new-chat-btn" class="btn">+ New chat</button>
+      <aside id="sidebar" class="sidebar">
+        <div class="sidebar-scroll">
+          <button id="new-chat-btn" class="btn btn-block"><span data-icon="plus"></span><span data-i18n="newChat">New chat</span></button>
 
-        <div>
-          <h2>Conversations</h2>
+          <nav id="topic-nav" class="topic-nav"></nav>
+
+          <div class="side-heading" data-i18n="recentChats">Recent chats</div>
+          <input id="chat-search" class="search" type="search" data-i18n-placeholder="searchChats" />
           <div id="conv-list" class="conv-list"></div>
-        </div>
 
-        <div>
-          <h2>Documents</h2>
+          <div class="side-heading" data-i18n="documents">Documents</div>
           <div id="dropzone" class="dropzone">
-            Drop a file here or click to upload<br />
-            <small>pdf, docx, txt, html, png, jpg</small>
+            <span data-icon="file"></span>
+            <span data-i18n="dropzone">Drop a file here or click to upload</span>
+            <small data-i18n="dropzoneTypes">pdf, docx, txt, html, png, jpg</small>
           </div>
           <input id="file-input" type="file" accept=".pdf,.docx,.txt,.html,.htm,.png,.jpg,.jpeg" class="hidden" />
-          <div id="doc-list" class="doc-list" style="margin-top:0.5rem;"></div>
+          <div id="doc-list" class="doc-list"></div>
         </div>
-
-        <div>
-          <h2>Language</h2>
-          <div class="lang-switch">
-            <button data-lang="auto" class="active">Auto</button>
-            <button data-lang="ar">عربي</button>
-            <button data-lang="en">EN</button>
-          </div>
-        </div>
-
-        <div>
-          <button id="insights-btn" class="btn-ghost" style="width:100%;">Insights</button>
-        </div>
+        <button id="qa-settings" class="side-link settings-link"><span data-icon="settings"></span><span data-i18n="settings">Settings</span></button>
       </aside>
 
       <main class="main">
+        <div class="chat-header">
+          <div id="chat-title" class="chat-title" dir="auto"></div>
+          <button id="clear-chat" class="ghost-btn"><span data-icon="trash" data-size="16"></span><span data-i18n="clearConversation">Clear conversation</span></button>
+        </div>
+
         <div id="messages" class="messages"></div>
         <div id="stage-line" class="stage-line"></div>
 
         <div class="composer">
-          <div class="composer-row">
-            <button id="mic-btn" class="mic-btn" title="Record voice">🎤</button>
-            <textarea id="composer-input" rows="1" placeholder="Ask WE Assistant anything..."></textarea>
-            <button id="send-btn" class="btn">Send</button>
+          <div id="doc-chips" class="doc-chips hidden"></div>
+          <div class="composer-box">
+            <button id="attach-btn" class="composer-icon" data-i18n-title="attach"><span data-icon="clip"></span></button>
+            <textarea id="composer-input" rows="1" data-i18n-placeholder="placeholder"></textarea>
+            <span id="rec-timer" class="rec-timer"></span>
+            <button id="mic-btn" class="composer-icon mic-btn" data-i18n-title="recordVoice"><span data-icon="mic"></span></button>
+            <button id="send-btn" class="send-btn" data-i18n-title="send"><span data-icon="send"></span><span id="send-label" class="send-label hidden"></span></button>
           </div>
           <div class="composer-footer">
-            <span id="rec-timer" class="rec-timer"></span>
-            <label><input id="review-toggle" type="checkbox" /> Review voice transcript before sending</label>
+            <span data-i18n="enterHint">Press Enter to send, Shift+Enter for a new line</span>
+            <label><input id="review-toggle" type="checkbox" /> <span data-i18n="reviewTranscript">Review voice transcript before sending</span></label>
           </div>
         </div>
       </main>
@@ -68,20 +85,66 @@
 
   <div id="sources-overlay" class="overlay hidden">
     <div class="drawer">
-      <button class="drawer-close" data-close="sources-overlay">✕</button>
-      <h3>Sources</h3>
+      <button class="drawer-close" data-close="sources-overlay"><span data-icon="x"></span></button>
+      <h3 data-i18n="sources">Sources</h3>
       <div id="sources-content"></div>
     </div>
   </div>
 
   <div id="insights-overlay" class="overlay hidden">
     <div class="drawer">
-      <button class="drawer-close" data-close="insights-overlay">✕</button>
-      <h3>Conversation Insights</h3>
+      <button class="drawer-close" data-close="insights-overlay"><span data-icon="x"></span></button>
+      <h3 data-i18n="insightsTitle">Conversation insights</h3>
       <div id="insights-content"></div>
     </div>
   </div>
 
+  <div id="settings-overlay" class="overlay center hidden">
+    <div class="dialog settings">
+      <button class="drawer-close" data-close="settings-overlay"><span data-icon="x"></span></button>
+      <h3 data-i18n="settingsTitle">Settings</h3>
+
+      <div class="setting">
+        <div class="setting-label" data-i18n="interfaceLanguage">Interface language</div>
+        <div class="segmented" data-setting="uiLang">
+          <button data-value="en">English</button>
+          <button data-value="ar">العربية</button>
+        </div>
+      </div>
+
+      <div class="setting">
+        <div class="setting-label" data-i18n="theme">Theme</div>
+        <div class="segmented" data-setting="theme">
+          <button data-value="light" data-i18n="themeLight">Light</button>
+          <button data-value="dark" data-i18n="themeDark">Dark</button>
+          <button data-value="system" data-i18n="themeSystem">System</button>
+        </div>
+      </div>
+
+      <div class="setting">
+        <div class="setting-label" data-i18n="answerLanguage">Answer language</div>
+        <div class="segmented" data-setting="answerLang">
+          <button data-value="auto" data-i18n="answerAuto">Auto</button>
+          <button data-value="ar" data-i18n="answerAr">Arabic</button>
+          <button data-value="en" data-i18n="answerEn">English</button>
+        </div>
+      </div>
+
+      <button class="btn" data-close="settings-overlay" data-i18n="ok">OK</button>
+    </div>
+  </div>
+
+  <div id="mic-help-overlay" class="overlay center hidden">
+    <div class="dialog">
+      <button class="drawer-close" data-close="mic-help-overlay"><span data-icon="x"></span></button>
+      <h3 id="mic-help-title"></h3>
+      <div id="mic-help-body"></div>
+      <button class="btn" data-close="mic-help-overlay" data-i18n="ok">OK</button>
+    </div>
+  </div>
+
+  <script src="icons.js"></script>
+  <script src="i18n.js"></script>
   <script src="api.js"></script>
   <script src="recorder.js"></script>
   <script src="app.js"></script>

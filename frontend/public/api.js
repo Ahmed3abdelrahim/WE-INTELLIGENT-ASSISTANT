@@ -61,6 +61,20 @@ const Api = {
     return (await apiFetch("/conversations")).json();
   },
 
+  async renameConversation(conversationId, title) {
+    return (
+      await apiFetch(`/conversations/${conversationId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title }),
+      })
+    ).json();
+  },
+
+  async deleteConversation(conversationId) {
+    return (await apiFetch(`/conversations/${conversationId}`, { method: "DELETE" })).json();
+  },
+
   async getMessages(conversationId) {
     return (await apiFetch(`/conversations/${conversationId}/messages`)).json();
   },
